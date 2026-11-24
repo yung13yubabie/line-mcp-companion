@@ -37,6 +37,8 @@ class NodeService : Service() {
                     .directory(appDir)
                     .redirectErrorStream(true)
                 pb.environment().apply {
+                    // libnode.so 若依賴 libc++_shared.so 等，放在同一個 nativeLibraryDir
+                    put("LD_LIBRARY_PATH", applicationInfo.nativeLibraryDir)
                     put("LINE_MCP_HOME", filesDir.absolutePath)
                     put("LINE_MCP_PORT", "47823")
                     put("LINE_MCP_TOKEN", Secrets.mcpToken(this@NodeService))
@@ -46,7 +48,13 @@ class NodeService : Service() {
                     put("TMPDIR", cacheDir.absolutePath)
                 }
                 val p = pb.start().also { proc = it }
-                p.inputStream.bufferedReader().forEachLine { Log.i("node", it) }
+                val logFile = File(filesDir, "node.log")
+                if (logFile.length() > 2_000_000) logFile.delete()
+                logFile.appendText("--- start ${System.currentTimeMillis()} ---\n")
+                p.inputStream.bufferedReader().forEachLine {
+                    Log.i("node", it)
+                    logFile.appendText(it + "\n")
+                }
                 Log.w("node", "exited ${p.waitFor()}")
             } catch (e: Exception) {
                 Log.e("node", "failed to start", e)
@@ -58,12 +66,16 @@ class NodeService : Service() {
 
     /** 每次版本更新時把 assets/nodeapp 複製到 filesDir（node 需要真實檔案路徑）。 */
     private fun extractNodeApp(): File {
-        val dest = File(filesDir, "nodeapp-${BuildConfigCompat.versionCode(this)}")
-        if (dest.exists()) return dest
+        // 以安裝時間當版本：每次重新安裝 APK 都會重新解出 main.mjs
+        val stamp = packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+        val dest = File(filesDir, "nodeapp-$stamp")
+        if (File(dest, ".done").exists()) return dest
+        filesDir.listFiles { f -> f.name.startsWith("nodeapp-") }?.forEach { it.deleteRecursively() }
         dest.mkdirs()
         assets.list("nodeapp")?.forEach { name ->
             assets.open("nodeapp/$name").use { i -> File(dest, name).outputStream().use { i.copyTo(it) } }
         }
+        File(dest, ".done").writeText("ok")
         return dest
     }
 
@@ -82,8 +94,4 @@ class NodeService : Service() {
         proc?.destroy()
         super.onDestroy()
     }
-}
-
-object BuildConfigCompat {
-    fun versionCode(s: Service): Long = s.packageManager.getPackageInfo(s.packageName, 0).longVersionCode
 }
