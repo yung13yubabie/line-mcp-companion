@@ -20,16 +20,21 @@ class NodeService : Service() {
     @Volatile private var proc: Process? = null
     @Volatile private var stopping = false
     @Volatile private var started = false
+    @Volatile private var restartSoon = false
+
+    companion object { const val ACTION_RESTART = "tw.linemcp.app.RESTART_NODE" }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        if (BuildConfig.DEBUG) android.os.StrictMode.setThreadPolicy(android.os.StrictMode.ThreadPolicy.Builder().detectAll().penaltyLog().build())
         // 越早呼叫越好：Android 要求 startForegroundService 後 5 秒內 startForeground
         startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_RESTART) { restartSoon = true; proc?.destroy() }
         if (!started) { started = true; thread(name = "node-supervisor") { supervise() } }
         return START_STICKY
     }
@@ -51,6 +56,7 @@ class NodeService : Service() {
                     put("LINE_CONTROL_PORT", "47824")
                     put("LINE_CONTROL_TOKEN", Secrets.controlToken(this@NodeService))
                     put("HOME", filesDir.absolutePath)
+                    if (MockMode.enabled(this@NodeService)) put("LINE_MCP_MOCK", "1")
                     put("TMPDIR", cacheDir.absolutePath)
                     // bionic 下 Node 讀不到系統時區（實測 Etc/Unknown），由 Java 傳入
                     put("TZ", java.util.TimeZone.getDefault().id)
@@ -68,7 +74,7 @@ class NodeService : Service() {
                 Log.e("node", "failed to start", e)
             }
             proc = null
-            if (!stopping) Thread.sleep(30_000)
+            if (!stopping) { Thread.sleep(if (restartSoon) 500 else 30_000); restartSoon = false }
         }
     }
 

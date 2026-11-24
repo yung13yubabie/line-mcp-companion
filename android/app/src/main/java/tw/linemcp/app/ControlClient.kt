@@ -25,6 +25,8 @@ class ControlClient(private val token: String, private val base: String = "http:
     suspend fun state() = JSONObject(call("GET", "/state"))
     suspend fun startQrLogin() = JSONObject(call("POST", "/login/qr"))
     suspend fun chats() = JSONArray(call("GET", "/chats"))
+    suspend fun info() = JSONObject(call("GET", "/info"))
+    suspend fun messages(chatId: String) = JSONArray(call("GET", "/messages?chat_id=" + java.net.URLEncoder.encode(chatId, "UTF-8") + "&limit=100"))
     suspend fun setAllowed(chatId: String, allowed: Boolean) =
         call("POST", "/chats/allow", JSONObject().put("chat_id", chatId).put("allowed", allowed))
 }

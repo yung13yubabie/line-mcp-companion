@@ -22,7 +22,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     // 每個 ABI 各出一個 APK：arm64-v8a（真機）、x86_64（模擬器）
     splits {
         abi {
