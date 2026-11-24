@@ -19,12 +19,18 @@ import kotlin.concurrent.thread
 class NodeService : Service() {
     @Volatile private var proc: Process? = null
     @Volatile private var stopping = false
+    @Volatile private var started = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onCreate() {
+        super.onCreate()
+        // 越早呼叫越好：Android 要求 startForegroundService 後 5 秒內 startForeground
         startForeground(1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        if (proc == null) thread(name = "node-supervisor") { supervise() }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!started) { started = true; thread(name = "node-supervisor") { supervise() } }
         return START_STICKY
     }
 

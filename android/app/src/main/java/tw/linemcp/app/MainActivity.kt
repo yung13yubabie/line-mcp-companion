@@ -19,6 +19,8 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 data class ChatItem(val id: String, val name: String, val type: String, val allowed: Boolean)
@@ -27,8 +29,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         startForegroundService(Intent(this, NodeService::class.java))
-        val client = ControlClient(Secrets.controlToken(this))
-        setContent { MaterialTheme { AppScreen(client) } }
+        val ctx = applicationContext
+        setContent {
+            // Keystore/EncryptedSharedPreferences 很慢，不能在主執行緒做（否則 ANR）
+            val client by produceState<ControlClient?>(null) {
+                value = withContext(Dispatchers.IO) { ControlClient(Secrets.controlToken(ctx)) }
+            }
+            MaterialTheme { client?.let { AppScreen(it) } ?: Text("準備中…") }
+        }
     }
 }
 
