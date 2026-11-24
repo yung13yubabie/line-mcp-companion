@@ -1,0 +1,9 @@
+node_modules/
+.state/
+*.db
+*.db-wal
+*.db-shm
+/android/.gradle/
+/android/**/build/
+/android/local.properties
+android/app/src/main/assets/nodeapp/main.mjs

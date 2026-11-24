@@ -1,0 +1,32 @@
+{
+  "name": "line-mcp-app",
+  "version": "0.1.0",
+  "description": "LINE 次要裝置同步 + 本機 MCP（Android App 核心）",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "login:qr": "node scripts/login-poc.ts",
+    "serve:fake": "node scripts/serve-fake.ts",
+    "typecheck": "tsc --noEmit",
+    "bundle:android": "bun build src/main.ts --target=node --format=esm --outfile android/app/src/main/assets/nodeapp/main.mjs",
+    "android:debug": "npm run bundle:android && cd android && ./gradlew assembleDebug",
+    "start": "node src/main.ts"
+  },
+  "license": "UNLICENSED",
+  "type": "module",
+  "dependencies": {
+    "@evex-dev/linejs": "^3.6.9",
+    "@evex-dev/linejs-types": "^3.6.9",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "qrcode-terminal": "^0.12.0",
+    "zod": "^4.6.7"
+  },
+  "private": true,
+  "engines": {
+    "node": "^24.11.0 || >=26.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/qrcode-terminal": "^0.12.2",
+    "typescript": "^7.0.2"
+  }
+}
