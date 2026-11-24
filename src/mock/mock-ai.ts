@@ -66,6 +66,11 @@ export class MockSender implements MessageSender {
 	}
 }
 
+/** Mock 貼圖圖片（不連網）：依 id 產生色塊 */
+export function mockStickerPng(id: string): Uint8Array {
+	return mockPng(`sticker-${id}`);
+}
+
 /** 64x64 漸層 PNG（顏色由 prompt 雜湊決定） */
 function mockPng(seed: string): Uint8Array {
 	let h = 0;

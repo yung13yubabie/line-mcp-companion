@@ -71,7 +71,18 @@ export class MockSource implements LineSource {
 	async recentMessages(chatId: string, limit: number) {
 		return (this.messages[chatId] ?? []).slice(-limit);
 	}
+	/** 模擬「上線後才收到」的訊息（示範反詐即時提醒與 AI 建議） */
+	live: SourceMessage[] = [
+		{ id: "9506", chatId: "c_mock_hood", senderMid: "u_mock_n3", fromSelf: false, sentAt: 0, contentType: "NONE", text: "這個群要關了，請大家換群到新群組 👉 line.me/ti/g2/mockNEW456 ，明天前沒加入的會被移除", decryptState: "plain" },
+	];
+	liveDelayMs = 20_000;
 	async pollOps(cursor: string | undefined): Promise<{ ops: SourceOp[]; cursor: string }> {
+		if (this.live.length) {
+			await new Promise((r) => setTimeout(r, this.liveDelayMs));
+			const msgs = this.live.splice(0).map((x) => ({ ...x, sentAt: Date.now() }));
+			for (const x of msgs) (this.messages[x.chatId] ??= []).push(x);
+			return { ops: msgs.map((message) => ({ revision: "2", kind: "message" as const, message })), cursor: "2" };
+		}
 		await new Promise((r) => setTimeout(r, 30_000)); // 模擬長輪詢，沒有新事件
 		return { ops: [], cursor: cursor ?? "1" };
 	}

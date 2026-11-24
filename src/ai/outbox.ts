@@ -206,7 +206,11 @@ export class Outbox {
 	setKill(on: boolean, actor: Actor = "ui"): number {
 		this.policy.setKillSwitch(on);
 		let n = 0;
-		if (on) n = Number(this.store.db.prepare("UPDATE outbox SET status='pending', scheduled_at=NULL, error='kill_switch' WHERE status='approved'").run().changes);
+		if (on) {
+			// 反詐提醒是時效性訊息，不留到之後：直接取消
+			this.store.db.prepare("UPDATE outbox SET status='rejected', error='kill_switch' WHERE status='approved' AND origin='scam_warn'").run();
+			n = Number(this.store.db.prepare("UPDATE outbox SET status='pending', scheduled_at=NULL, error='kill_switch' WHERE status='approved'").run().changes);
+		}
 		this.audit.log(actor, on ? "kill_switch_on" : "kill_switch_off", { detail: { returned_to_pending: n } });
 		return n;
 	}

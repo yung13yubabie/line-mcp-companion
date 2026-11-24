@@ -9,3 +9,6 @@ export class MockSender {
 		throw new Error("mock sender is not available in release builds");
 	}
 }
+export function mockStickerPng(_id: string): Uint8Array {
+	throw new Error("mock is not available in release builds");
+}
