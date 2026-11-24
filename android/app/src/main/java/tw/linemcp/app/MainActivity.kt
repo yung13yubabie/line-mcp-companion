@@ -28,7 +28,8 @@ data class ChatItem(val id: String, val name: String, val type: String, val allo
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        startForegroundService(Intent(this, NodeService::class.java))
+        // App 在前景時用 startService 啟動（沒有 5 秒 startForeground 期限），Service 內再升級為前景服務
+        startService(Intent(this, NodeService::class.java))
         val ctx = applicationContext
         setContent {
             // Keystore/EncryptedSharedPreferences 很慢，不能在主執行緒做（否則 ANR）
