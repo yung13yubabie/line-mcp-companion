@@ -15,8 +15,10 @@ export class LinejsSender implements MessageSender {
 	constructor(base: BaseClient) {
 		this.#base = base;
 	}
-	async sendText(chatId: string, text: string, opts: { replyTo?: string | null } = {}): Promise<void> {
-		await withSendPermit(() => this.#base.talk.sendMessage({ to: chatId, text, relatedMessageId: opts.replyTo ?? undefined }));
+	async sendText(chatId: string, text: string, opts: { replyTo?: string | null; mentions?: { start: number; end: number; mid: string }[] } = {}): Promise<void> {
+		// @：contentMetadata.MENTION = {"MENTIONEES":[{"S":"起","E":"迄","M":mid}]}（UTF-16 位置）
+		const contentMetadata = opts.mentions?.length ? { MENTION: JSON.stringify({ MENTIONEES: opts.mentions.map((m) => ({ S: String(m.start), E: String(m.end), M: m.mid })) }) } : undefined;
+		await withSendPermit(() => this.#base.talk.sendMessage({ to: chatId, text, contentMetadata, relatedMessageId: opts.replyTo ?? undefined }));
 	}
 	async sendSticker(chatId: string, s: StickerRef, opts: { replyTo?: string | null } = {}): Promise<void> {
 		await withSendPermit(() =>

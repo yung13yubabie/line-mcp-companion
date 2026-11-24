@@ -40,9 +40,12 @@ export class MockSender implements MessageSender {
 	constructor(store: Store) {
 		this.#store = store;
 	}
-	async sendText(chatId: string, text: string, opts: { replyTo?: string | null } = {}): Promise<void> {
+	async sendText(chatId: string, text: string, opts: { replyTo?: string | null; mentions?: { start: number; end: number; mid: string }[] } = {}): Promise<void> {
 		this.sent.push({ chatId, kind: "text", text });
-		this.#store.insertMessage({ chatId, id: `98${Date.now()}${this.#seq++}`, senderMid: "u_mock_me", fromSelf: true, sentAt: Date.now(), contentType: "NONE", text, meta: opts.replyTo ? { relatedMessageId: opts.replyTo } : null });
+		const meta: Record<string, unknown> = {};
+		if (opts.replyTo) meta.relatedMessageId = opts.replyTo;
+		if (opts.mentions?.length) meta.MENTION = JSON.stringify({ MENTIONEES: opts.mentions.map((m) => ({ S: String(m.start), E: String(m.end), M: m.mid })) });
+		this.#store.insertMessage({ chatId, id: `98${Date.now()}${this.#seq++}`, senderMid: "u_mock_me", fromSelf: true, sentAt: Date.now(), contentType: "NONE", text, meta: Object.keys(meta).length ? meta : null });
 	}
 	async sendSticker(chatId: string, s: StickerRef, opts: { replyTo?: string | null } = {}): Promise<void> {
 		this.sent.push({ chatId, kind: "sticker" });

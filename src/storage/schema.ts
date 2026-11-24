@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS outbox (
   scheduled_at  INTEGER,
   decided_at    INTEGER,
   sent_at       INTEGER,
+  mentions_json TEXT,                          -- 反詐提醒 @ 管理員：[{start,end,mid}]
   error         TEXT
 );
 CREATE INDEX IF NOT EXISTS outbox_status ON outbox(status, scheduled_at);
@@ -155,6 +156,7 @@ CREATE TABLE IF NOT EXISTS scam_alert (
   ai_verdict   TEXT,                          -- scam | suspicious | ok | NULL（沒有 AI 判讀）
   ai_reason    TEXT,
   status       TEXT    NOT NULL DEFAULT 'new',-- new | seen | dismissed
+  category     TEXT,                          -- 詐騙類型（假搬家群、投資飆股帶單…）
   created_at   INTEGER NOT NULL,
   UNIQUE(chat_id, message_id)
 );
@@ -167,7 +169,18 @@ CREATE TABLE IF NOT EXISTS scam_warn (
   min_level    TEXT    NOT NULL DEFAULT 'high', -- high | suspicious
   cooldown_min INTEGER NOT NULL DEFAULT 30,     -- 同一發送者＋同類型多久內不重複提醒
   daily_cap    INTEGER NOT NULL DEFAULT 10,
+  mention_admins INTEGER NOT NULL DEFAULT 1,    -- 提醒時 @ 這群的管理員
+  template     TEXT,                            -- NULL = 用全域範本
   updated_at   INTEGER NOT NULL
+);
+
+-- 每群組的管理員／信任成員：不掃描他們的訊息；mention=1 的人會在提醒裡被 @（最多 3 位）
+CREATE TABLE IF NOT EXISTS scam_admin (
+  chat_id  TEXT NOT NULL,
+  mid      TEXT NOT NULL,
+  name     TEXT,
+  mention  INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (chat_id, mid)
 );
 
 -- 社群貼文草稿（只存草稿，App 不會發布）

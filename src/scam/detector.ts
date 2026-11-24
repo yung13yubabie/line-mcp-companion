@@ -3,11 +3,12 @@
  *   1. 本機規則計分（rules.ts，不需要 AI）
  *   2. 範例庫相似度（scam_sample：內建 + 使用者 / MCP 新增）
  *   3. 選用：AI 判讀（有 API key 且使用者開啟時）
- * 只產生警示，絕不自動回覆、不踢人、不送已讀、不對訊息採取任何動作。
+ * 偵測本身只產生警示；是否在群組發提醒由 warner.ts 決定（每群組開關，預設關）。不踢人、不送已讀。
+ * 群組管理員 / 信任成員（scam_admin）的訊息不掃描。
  * 只掃描 MCP 白名單內的會話；預設只掃群組（1 對 1 可另外開）。
  */
 import type { Store } from "../storage/db.ts";
-import { scoreText, similarity } from "./rules.ts";
+import { scoreText, similarity, categoryOf } from "./rules.ts";
 import defaults from "./samples.default.json" with { type: "json" };
 import { neutralize } from "../ai/prompt.ts";
 import type { ChatMsg } from "../ai/prompt.ts";
@@ -35,6 +36,7 @@ export interface ScamAlert {
 	level: ScamLevel;
 	rules: string[];
 	sample_category: string | null;
+	category: string | null;
 	similarity: number | null;
 	ai_verdict: string | null;
 	ai_reason: string | null;
@@ -134,6 +136,25 @@ export class ScamDetector {
 		return { score, level, rules, sample: bestSim >= 0.3 ? best : null, similarity: Math.round(bestSim * 100) / 100 };
 	}
 
+	// ---- 群組管理員 / 信任成員 ------------------------------------------------
+	admins(chatId: string): { mid: string; name: string | null; mention: boolean }[] {
+		return (this.#store.db.prepare("SELECT mid, name, mention FROM scam_admin WHERE chat_id = ? ORDER BY rowid").all(chatId) as { mid: string; name: string | null; mention: number }[]).map((r) => ({ ...r, mention: r.mention === 1 }));
+	}
+	setAdmin(chatId: string, mid: string, opts: { name?: string | null; mention?: boolean; remove?: boolean }): void {
+		if (opts.remove) {
+			this.#store.db.prepare("DELETE FROM scam_admin WHERE chat_id = ? AND mid = ?").run(chatId, mid);
+			return;
+		}
+		const row = this.#store.db.prepare("SELECT display_name AS n FROM participant WHERE mid = ?").get(mid) as { n: string | null } | undefined;
+		const name = opts.name ?? row?.n ?? null;
+		this.#store.db
+			.prepare("INSERT INTO scam_admin(chat_id, mid, name, mention) VALUES (?, ?, ?, ?) ON CONFLICT(chat_id, mid) DO UPDATE SET name=excluded.name, mention=excluded.mention")
+			.run(chatId, mid, name == null ? null : String(name).slice(0, 40), opts.mention === false ? 0 : 1);
+	}
+	isTrusted(chatId: string, mid: string): boolean {
+		return !!this.#store.db.prepare("SELECT 1 FROM scam_admin WHERE chat_id = ? AND mid = ?").get(chatId, mid);
+	}
+
 	#inScope(chatId: string): boolean {
 		const c = this.#store.getChat(chatId);
 		if (!c || c.allowed !== 1) return false;
@@ -145,14 +166,16 @@ export class ScamDetector {
 		if (!this.enabled || !this.#inScope(chatId)) return null;
 		const m = this.#store.getMessage(chatId, messageId);
 		if (!m || m.from_self === 1 || !m.text) return null;
+		if (m.sender_mid && this.isTrusted(chatId, m.sender_mid)) return null;
 		const e = this.evaluate(m.text);
 		if (!e.level) return null;
+		const category = categoryOf(e.rules, m.text, e.sample?.category);
 		const r = this.#store.db
 			.prepare(
-				`INSERT OR IGNORE INTO scam_alert(chat_id, message_id, score, level, rules, sample_id, similarity, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT OR IGNORE INTO scam_alert(chat_id, message_id, score, level, rules, sample_id, similarity, category, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
-			.run(chatId, messageId, e.score, e.level, JSON.stringify(e.rules), e.sample?.id ?? null, e.similarity || null, Date.now());
+			.run(chatId, messageId, e.score, e.level, JSON.stringify(e.rules), e.sample?.id ?? null, e.similarity || null, category, Date.now());
 		if (Number(r.changes) === 0) return null;
 		const id = Number(r.lastInsertRowid);
 		if (this.aiEnabled && this.judge) void this.#aiJudge(id, m.text).catch(() => {});

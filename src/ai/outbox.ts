@@ -13,6 +13,7 @@ import { validSticker, type StickerRef } from "./stickers.ts";
 import type { MessageSender } from "./sender.ts";
 import { Audit, redact, type Actor } from "./audit.ts";
 import { sniffMime } from "./provider.ts";
+import { stripMentions } from "../scam/warner.ts";
 
 export type OutboxStatus = "pending" | "approved" | "sent" | "rejected" | "failed" | "expired";
 export type Origin = "auto" | "suggest" | "mcp" | "ui" | "scam_warn";
@@ -28,6 +29,7 @@ export interface OutboxItem {
 	origin: Origin;
 	origin_detail: string | null;
 	reply_to: string | null;
+	mentions_json: string | null;
 	trigger_id: string | null;
 	status: OutboxStatus;
 	flags: string | null;
@@ -213,17 +215,17 @@ export class Outbox {
 	 * 反詐即時提醒：使用者已對該群組開啟，所以不進確認佇列、立即排程。
 	 * 仍受 kill switch 與 MCP 白名單限制（warnCheck 另外檢查群組開關與每日上限）。
 	 */
-	enqueueWarning(chatId: string, text: string, replyTo: string, detail: string): OutboxItem {
+	enqueueWarning(chatId: string, text: string, replyTo: string, detail: string, mentions: { start: number; end: number; mid: string }[] = []): OutboxItem {
 		if (this.policy.killSwitch) throw denyError("kill_switch");
 		const chat = this.store.getChat(chatId);
 		if (!chat || chat.allowed !== 1) throw denyError("chat_not_allowed");
 		const now = this.policy.clock.now();
 		const r = this.store.db
 			.prepare(
-				`INSERT INTO outbox(chat_id, kind, text, origin, origin_detail, reply_to, status, created_at, scheduled_at, decided_at)
-				 VALUES (?, 'text', ?, 'scam_warn', ?, ?, 'approved', ?, ?, NULL)`,
+				`INSERT INTO outbox(chat_id, kind, text, origin, origin_detail, reply_to, status, created_at, scheduled_at, decided_at, mentions_json)
+				 VALUES (?, 'text', ?, 'scam_warn', ?, ?, 'approved', ?, ?, NULL, ?)`,
 			)
-			.run(chatId, text.slice(0, MAX_TEXT), detail.slice(0, 60), replyTo, now, now);
+			.run(chatId, text.slice(0, MAX_TEXT), detail.slice(0, 60), replyTo, now, now, mentions.length ? JSON.stringify(mentions) : null);
 		const item = this.get(Number(r.lastInsertRowid))!;
 		this.audit.log("system", "scam_warning_scheduled", { chatId, detail: { id: item.id, reply_to: replyTo, kind: detail } });
 		return item;
@@ -272,7 +274,16 @@ export class Outbox {
 				}
 				try {
 					const opts = { replyTo: it.reply_to };
-					if (it.kind === "text") await this.sender.sendText(it.chat_id, it.text!, opts);
+					const mentions = it.mentions_json ? (JSON.parse(it.mentions_json) as { start: number; end: number; mid: string }[]) : [];
+					if (it.kind === "text" && mentions.length) {
+						try {
+							await this.sender.sendText(it.chat_id, it.text!, { ...opts, mentions });
+						} catch (e) {
+							// @ 失敗（LINE 只准 @ 最近發過言的人）→ 拿掉 @ 段落重送一次
+							this.audit.log("system", "mention_failed_retry", { chatId: it.chat_id, ok: false, detail: { id: it.id, error: redact((e as Error).message, 120) } });
+							await this.sender.sendText(it.chat_id, stripMentions(it.text!, mentions), opts);
+						}
+					} else if (it.kind === "text") await this.sender.sendText(it.chat_id, it.text!, opts);
 					else if (it.kind === "sticker") {
 						const st = JSON.parse(it.sticker_json!) as StickerRef;
 						if (!this.stickerSendable(st)) throw new Error("sticker_not_owned");

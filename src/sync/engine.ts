@@ -25,6 +25,8 @@ export class SyncEngine {
 	#state: SyncStatus["state"] = "idle";
 	#lastError: string | null = null;
 	#running: Promise<void> | null = null;
+	/** 增量同步寫入新訊息後呼叫（AI 引擎、反詐偵測）；例外不影響同步 */
+	onNewMessages: ((msgs: { chatId: string; id: string; fromSelf: boolean }[]) => void) | null = null;
 
 	constructor(store: Store, src: LineSource) {
 		this.#store = store;
@@ -78,12 +80,16 @@ export class SyncEngine {
 		const { ops, cursor: next } = await this.#src.pollOps(cursor);
 		const inScope = (chatId: string) => this.scope === "all" || this.#store.getChat(chatId)?.allowed === 1;
 		let added = 0;
+		const fresh: { chatId: string; id: string; fromSelf: boolean }[] = [];
 		this.#store.transaction(() => {
 			for (const op of ops) {
 				if (op.kind === "message" && op.message) {
 					const m = op.message;
 					if (!this.#store.getChat(m.chatId)) this.#store.upsertChat({ id: m.chatId, type: guessType(m.chatId), name: null });
-					if (inScope(m.chatId) && this.#write(m)) added++;
+					if (inScope(m.chatId) && this.#write(m)) {
+						added++;
+						fresh.push({ chatId: m.chatId, id: m.id, fromSelf: m.fromSelf });
+					}
 				} else if (op.kind === "read" && op.read) {
 					// 這是「使用者在手機上讀了」的通知，只更新本機狀態，不會回寫 LINE。
 					this.#store.setReadState(op.read.chatId, op.read.messageId, op.read.at);
@@ -92,6 +98,13 @@ export class SyncEngine {
 			this.#store.setSyncState("talk_revision", next);
 			this.#store.setSyncState("last_poll_at", String(Date.now()));
 		});
+		if (fresh.length && this.onNewMessages) {
+			try {
+				this.onNewMessages(fresh);
+			} catch (e) {
+				console.error("onNewMessages hook failed:", (e as Error).message);
+			}
+		}
 		return added;
 	}
 

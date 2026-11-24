@@ -15,6 +15,18 @@ export const SHORTENERS = [
 	"s.id", "goo.su", "gg.gg", "x.gd", "rebrand.ly", "short.gy", "shorturl.gg", "0rz.tw", "risu.io", "cli.re", "u.to", "clck.ru", "qrco.de",
 	"tw.gg", "url.cn", "dwz.cn", "suo.im", "supr.link", "urlr.me",
 ];
+/** 主流內容網站 / 交易所（改作自 anti-scam-helper rules.mjs MAINSTREAM_CONTENT_DOMAINS）：網址本身不是詐騙依據 */
+export const MAINSTREAM_DOMAINS = ["youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "bilibili.com", "b23.tv", "twitch.tv", "tiktok.com", "douyin.com", "xiaohongshu.com", "instagram.com", "facebook.com", "fb.watch", "threads.net", "threads.com", "x.com", "twitter.com", "reddit.com", "podcasts.apple.com", "open.spotify.com", "spotify.com", "soundcloud.com", "dcard.tw", "ptt.cc", "mobile01.com", "bahamut.com.tw", "gamer.com.tw", "pixnet.net", "vocus.cc", "substack.com", "dev.to", "zhihu.com", "weibo.com", "linkedin.com", "pinterest.com", "news.google.com", "udn.com", "ltn.com.tw", "chinatimes.com", "ettoday.net", "setn.com", "tvbs.com.tw", "cna.com.tw", "pts.org.tw", "storm.mg", "thenewslens.com", "technews.tw", "ithome.com.tw", "inside.com.tw", "bnext.com.tw", "businessweekly.com.tw", "cw.com.tw", "bbc.com", "bbc.co.uk", "cnn.com", "nytimes.com", "reuters.com", "bloomberg.com", "theverge.com", "techcrunch.com", "wired.com", "engadget.com", "nikkei.com", "tradingview.com", "pionex.com", "binance.com", "okx.com", "bybit.com", "bitget.com", "coinmarketcap.com", "coingecko.com", "max.maicoin.com", "bitopro.com", "investing.com", "cnyes.com", "shopee.tw", "momoshop.com.tw", "pchome.com.tw", "books.com.tw", "amazon.co.jp", "rakuten.com.tw", "taobao.com", "tmall.com", "jd.com", "github.com", "google.com", "maps.app.goo.gl", "165.npa.gov.tw", "gov.tw", "edu.tw"];
+
+export function linkHosts(text: string): string[] {
+	const out: string[] = [];
+	for (const m of text.matchAll(/(?:https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?=[\/:?#\s]|$)/gi)) out.push(m[1]!.toLowerCase().replace(/^www\./, ""));
+	return out;
+}
+export function isMainstream(host: string): boolean {
+	return MAINSTREAM_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`));
+}
+
 const esc = (d: string) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** 詢問或提醒詐騙（「這是詐騙嗎」「不要亂加」）：扣分，避免把好心提醒的人標成詐騙 */
@@ -74,11 +86,18 @@ export function scoreText(text: string): RuleScore {
 	const { norm, stripped } = normalize(text);
 	const hits: { name: string; score: number }[] = [];
 	for (const r of RULES) if (r.pattern.test(norm) || r.pattern.test(stripped)) hits.push({ name: r.name, score: r.score });
+	// 只有主流網站連結（YouTube、新聞、交易所官網…）→「網址」不計分
+	const hosts = linkHosts(norm);
+	if (hosts.length && hosts.every(isMainstream)) {
+		const i = hits.findIndex((h) => h.name === "網址");
+		if (i >= 0) hits.splice(i, 1);
+	}
 	let score = hits.reduce((n, h) => n + h.score, 0);
 	const warningTone = ASK_SCAM.test(norm) || ANTI_SCAM_WARNING.test(norm);
-	const hasLink = hits.some((h) => /網址|LINE 邀請|群組邀請/.test(h.name));
-	if (warningTone) score -= hasLink ? 2 : 4; // 好心提醒 / 詢問
-	return { score, hits, warningTone };
+	// 防繞過（notify-rules.mjs）：詐騙訊息加上「小心詐騙」字樣但同時附連結 / 邀請 / 聯絡方式 → 不扣分
+	const hasContact = hits.some((h) => /網址|LINE 邀請|群組邀請|短網址|子網域|群組連結|私下聯繫/.test(h.name));
+	if (warningTone && !hasContact) score -= 4; // 好心提醒 / 詢問
+	return { score, hits, warningTone: warningTone && !hasContact };
 }
 
 /** 字元 bigram Jaccard 相似度（範例比對） */
@@ -95,4 +114,51 @@ export function similarity(a: string, b: string): number {
 	let inter = 0;
 	for (const x of A) if (B.has(x)) inter++;
 	return inter / (A.size + B.size - inter);
+}
+
+/** 提醒用的詐騙類型（對應 anti-scam-helper scam-patterns.example.json 的分類）與一句話提示 */
+export const CATEGORY_TIPS: Record<string, string> = {
+	假搬家群: "正常群組不會叫大家搬新群或加備用群，別點連結、別加入",
+	投資飆股帶單: "保證獲利、老師帶單跟單都是詐騙，別加好友、別匯款",
+	假冒名人報牌: "名人或退休工程師免費報明牌是冒名詐騙，別加群",
+	假投資不出金: "出金前要先繳保證金或稅金就是詐騙，別再匯錢",
+	加LINE私聊: "陌生人叫你加 LINE 私聊多半是詐騙，別加",
+	虛擬貨幣: "保證收益、搬磚套利的虛幣邀約是詐騙，別入金",
+	兼職刷單: "刷單、按讚日領、要先墊付的兼職都是詐騙",
+	愛情交友: "網友要你匯款或付包裹關稅都是詐騙",
+	盜用帳號: "別給驗證碼、別點投票連結，帳號會被盜",
+	"假求職/收購帳戶": "收購或租借帳戶、出國高薪打工會讓你變人頭帳戶",
+	假貸款: "免審核、要先付手續費的貸款是詐騙",
+	假客服: "要你解除分期或操作 ATM 的都是詐騙，有疑問撥 165",
+	假網拍實名: "網購要你實名驗證、開通金流必有詐",
+	中獎: "中獎要先付費或填個資就是詐騙",
+	博弈: "娛樂城、穩贏運彩都是詐騙，別儲值",
+	可疑連結: "不明短網址或連結先別點，有疑問撥 165 查證",
+};
+
+/** 範例庫的分類名 → 提醒分類 */
+const SAMPLE_CATEGORY: [RegExp, string][] = [
+	[/搬家群|換群/, "假搬家群"], [/名人|報牌/, "假冒名人報牌"], [/不出金/, "假投資不出金"], [/飆股|帶單/, "投資飆股帶單"],
+	[/LINE\s*私聊/i, "加LINE私聊"], [/虛擬貨幣|虛幣/, "虛擬貨幣"], [/刷單|兼職/, "兼職刷單"], [/愛情|交友/, "愛情交友"],
+	[/求職|收購帳戶/, "假求職/收購帳戶"], [/盜用帳號/, "盜用帳號"], [/貸款/, "假貸款"], [/客服|分期/, "假客服"],
+	[/網拍|實名/, "假網拍實名"], [/中獎/, "中獎"], [/博弈/, "博弈"],
+];
+
+export function categoryOf(rules: string[], text: string, sampleCategory?: string | null): string {
+	const t = normalize(text).norm;
+	const has = (re: RegExp) => rules.some((r) => re.test(r));
+	if (has(/換群|群組公告|群組連結|催促加入新群|群組邀請連結|假冒官方邀請/)) return "假搬家群";
+	if (has(/假冒名人報牌/)) return "假冒名人報牌";
+	if (has(/假投資平台/)) return /出金|保證金|凍結|稅/.test(t) ? "假投資不出金" : "投資飆股帶單";
+	if (has(/投資帶單/)) return "投資飆股帶單";
+	if (has(/虛幣/)) return "虛擬貨幣";
+	if (has(/兼職刷單/)) return "兼職刷單";
+	if (has(/愛情交友/)) return "愛情交友";
+	if (has(/盜帳號/)) return /收購|出租|租借|打工|高薪/.test(t) ? "假求職/收購帳戶" : "盜用帳號";
+	if (has(/貸款博弈/)) return /博弈|娛樂城|百家樂|運彩|老虎機|首儲|儲值/.test(t) ? "博弈" : "假貸款";
+	if (has(/中獎|假客服/)) return /實名|金流|賣場|網拍/.test(t) ? "假網拍實名" : /中獎|抽中|獎金|獎品/.test(t) ? "中獎" : "假客服";
+	if (has(/假紅包/)) return "中獎";
+	if (sampleCategory) for (const [re, c] of SAMPLE_CATEGORY) if (re.test(sampleCategory)) return c;
+	if (has(/LINE 邀請|私下聯繫/)) return "加LINE私聊";
+	return "可疑連結";
 }
