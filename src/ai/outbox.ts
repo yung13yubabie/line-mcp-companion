@@ -15,7 +15,7 @@ import { Audit, redact, type Actor } from "./audit.ts";
 import { sniffMime } from "./provider.ts";
 
 export type OutboxStatus = "pending" | "approved" | "sent" | "rejected" | "failed" | "expired";
-export type Origin = "auto" | "suggest" | "mcp" | "ui";
+export type Origin = "auto" | "suggest" | "mcp" | "ui" | "scam_warn";
 
 export interface OutboxItem {
 	id: number;
@@ -66,6 +66,8 @@ export class Outbox {
 	sender: MessageSender;
 	/** 貼圖是否可送（只有我送過的貼圖）；未設定 = 不允許任何貼圖 */
 	stickerSendable: (s: StickerRef) => boolean = () => false;
+	/** 反詐即時提醒（origin=scam_warn）的送出前檢查；回傳 null = 可送。未設定 = 不送。 */
+	warnCheck: (it: OutboxItem) => string | null = () => "scam_warn_unavailable";
 	#busy = false;
 
 	constructor(store: Store, policy: AiPolicy, audit: Audit, sender: MessageSender) {
@@ -207,6 +209,26 @@ export class Outbox {
 		return n;
 	}
 
+	/**
+	 * 反詐即時提醒：使用者已對該群組開啟，所以不進確認佇列、立即排程。
+	 * 仍受 kill switch 與 MCP 白名單限制（warnCheck 另外檢查群組開關與每日上限）。
+	 */
+	enqueueWarning(chatId: string, text: string, replyTo: string, detail: string): OutboxItem {
+		if (this.policy.killSwitch) throw denyError("kill_switch");
+		const chat = this.store.getChat(chatId);
+		if (!chat || chat.allowed !== 1) throw denyError("chat_not_allowed");
+		const now = this.policy.clock.now();
+		const r = this.store.db
+			.prepare(
+				`INSERT INTO outbox(chat_id, kind, text, origin, origin_detail, reply_to, status, created_at, scheduled_at, decided_at)
+				 VALUES (?, 'text', ?, 'scam_warn', ?, ?, 'approved', ?, ?, NULL)`,
+			)
+			.run(chatId, text.slice(0, MAX_TEXT), detail.slice(0, 60), replyTo, now, now);
+		const item = this.get(Number(r.lastInsertRowid))!;
+		this.audit.log("system", "scam_warning_scheduled", { chatId, detail: { id: item.id, reply_to: replyTo, kind: detail } });
+		return item;
+	}
+
 	/** 舊的 pending 過期；同會話新的建議取代舊的 */
 	expireStale(): number {
 		const cut = this.policy.clock.now() - PENDING_TTL_MS;
@@ -229,7 +251,15 @@ export class Outbox {
 			const due = this.store.db.prepare("SELECT * FROM outbox WHERE status='approved' AND scheduled_at <= ? ORDER BY scheduled_at, id").all(now) as unknown as OutboxItem[];
 			for (const it of due) {
 				const byUser = it.decided_at !== null;
-				const chk = this.policy.checkSend(it.chat_id, it.kind, { approvedByUser: byUser });
+				if (it.origin === "scam_warn") {
+					const why = this.policy.killSwitch ? "kill_switch" : this.store.getChat(it.chat_id)?.allowed !== 1 ? "chat_not_allowed" : this.warnCheck(it);
+					if (why) {
+						this.store.db.prepare("UPDATE outbox SET status='rejected', error=? WHERE id=?").run(why, it.id);
+						this.audit.log("system", "scam_warning_blocked", { chatId: it.chat_id, ok: false, detail: { id: it.id, reason: why } });
+						continue;
+					}
+				}
+				const chk = it.origin === "scam_warn" ? ({ ok: true } as const) : this.policy.checkSend(it.chat_id, it.kind, { approvedByUser: byUser });
 				if (!chk.ok) {
 					this.#bounce(it, chk.reason);
 					continue;
@@ -258,7 +288,7 @@ export class Outbox {
 						if (it.text) await this.sender.sendText(it.chat_id, it.text, opts);
 					}
 					this.store.db.prepare("UPDATE outbox SET status='sent', sent_at=?, error=NULL WHERE id=?").run(this.policy.clock.now(), it.id);
-					this.audit.log(it.origin === "mcp" ? "mcp" : it.origin === "ui" ? "ui" : "auto", "sent", {
+					this.audit.log(it.origin === "mcp" ? "mcp" : it.origin === "ui" ? "ui" : it.origin === "scam_warn" ? "system" : "auto", it.origin === "scam_warn" ? "scam_warning_sent" : "sent", {
 						chatId: it.chat_id,
 						detail: { id: it.id, kind: it.kind, approved_by_user: byUser },
 					});

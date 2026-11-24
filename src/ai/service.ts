@@ -9,7 +9,21 @@ import { AiPolicy, inActiveHours, denyError } from "./policy.ts";
 import { Outbox, type OutboxItem } from "./outbox.ts";
 import { Audit, redact, type Actor } from "./audit.ts";
 import { OpenAICompatProvider, PRESETS, validateBaseUrl, type AiConfig, type AiProvider, type AiCapabilities, type ProviderKind } from "./provider.ts";
-import { buildReplyPrompt, buildImagePrompt, detectInjection, sanitizeReply, historyHasUrl, type HistoryItem } from "./prompt.ts";
+import { buildReplyPrompt, buildImagePrompt, detectInjection, sanitizeReply, historyHasUrl, extractSticker, type HistoryItem } from "./prompt.ts";
+import { StickerCatalog, type StickerRef } from "./stickers.ts";
+import { lieflat } from "../style/lieflat/index.ts";
+import { socialPost, DEFAULT_VOICE, type Platform, type VoiceCard } from "../style/social-post/index.ts";
+import type { FilterResult } from "../style/types.ts";
+
+export type AiDriver = "connector" | "builtin";
+
+export interface Suggestion {
+	text: string;
+	sticker: StickerRef | null;
+	flags: string[];
+	injection_hits: string[];
+	style: Pick<FilterResult, "method" | "changed"> & { before: number; after: number };
+}
 
 export interface AiServiceOptions {
 	home: string;
@@ -31,6 +45,7 @@ export class AiService {
 	readonly policy: AiPolicy;
 	readonly outbox: Outbox;
 	readonly audit: Audit;
+	readonly stickers: StickerCatalog;
 	#opts: AiServiceOptions;
 	#provider: AiProvider | null = null;
 	#timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -42,6 +57,23 @@ export class AiService {
 		this.outbox = outbox;
 		this.audit = audit;
 		this.#opts = opts;
+		this.stickers = new StickerCatalog(store);
+		outbox.stickerSendable = (st) => this.stickers.isSendable(st);
+	}
+
+	/** 「由連接器代聊」（外部 AI 經 MCP 送訊息，不需要 App 內 API key）或「App 內建 AI」 */
+	get driver(): AiDriver {
+		return this.store.getSetting("ai_driver") === "builtin" ? "builtin" : "connector";
+	}
+	setDriver(d: AiDriver): void {
+		this.store.setSetting("ai_driver", d === "builtin" ? "builtin" : "connector");
+		this.audit.log("ui", "ai_driver_changed", { detail: { driver: d } });
+	}
+	get persona(): string {
+		return this.store.getSetting("ai_persona") ?? "";
+	}
+	setPersona(p: string): void {
+		this.store.setSetting("ai_persona", String(p ?? "").slice(0, 300));
 	}
 
 	// ---- 設定 -------------------------------------------------------------
@@ -125,30 +157,34 @@ export class AiService {
 
 	// ---- 產生 -------------------------------------------------------------
 	#history(chatId: string, n = 20): HistoryItem[] {
-		return this.store
-			.getMessages(chatId, { limit: n })
-			.reverse()
-			.map((m: MessageRow) => ({ sender: m.sender_name ?? m.sender_mid ?? "?", fromSelf: m.from_self === 1, text: m.text, type: m.content_type, at: m.sent_at }));
+		return this.store.getMessages(chatId, { limit: n }).reverse().map(toItem);
 	}
 
 	/**
 	 * 產生建議回覆（不送出）。checks：kill switch、全域開關、白名單、mode != off。
 	 * flags 含 injection_suspected / url_in_output 等。
 	 */
-	async suggest(chatId: string, actor: Actor, instruction?: string | null): Promise<{ text: string; flags: string[]; injection_hits: string[] }> {
+	async suggest(chatId: string, actor: Actor, instruction?: string | null, targetId?: string | null): Promise<Suggestion> {
 		const b = this.policy.checkBasic(chatId, "text");
 		if (!b.ok) {
 			this.audit.log(actor, "suggest_denied", { chatId, ok: false, detail: { reason: b.reason } });
 			throw denyError(b.reason);
 		}
 		const history = this.#history(chatId);
-		// 只檢查「我最後一次發言之後」的對方訊息
+		let target: HistoryItem | null = null;
+		if (targetId) {
+			const t = this.store.getMessage(chatId, targetId);
+			if (!t) throw new Error("target message not found in this chat");
+			target = toItem(t);
+		}
+		// 檢查「我最後一次發言之後」的對方訊息＋指定要回覆的那則
 		let lastSelf = -1;
 		history.forEach((h, i) => h.fromSelf && (lastSelf = i));
-		const incoming = history.slice(lastSelf + 1).filter((h) => !h.fromSelf);
+		const incoming = [...history.slice(lastSelf + 1).filter((h) => !h.fromSelf), ...(target && !target.fromSelf ? [target] : [])];
 		const hits = [...new Set(incoming.flatMap((h) => detectInjection(h.text).hits))];
 		const chat = this.store.getChat(chatId)!;
-		const msgs = buildReplyPrompt({ chatName: chat.name, history, instruction });
+		const stickerList = this.stickers.promptList();
+		const msgs = buildReplyPrompt({ chatName: chat.name, history, instruction, persona: this.persona, stickers: stickerList, target });
 		let raw: string;
 		try {
 			raw = await this.provider().chat(msgs);
@@ -156,18 +192,42 @@ export class AiService {
 			this.audit.log(actor, "ai_error", { chatId, ok: false, detail: { error: redact((e as Error).message, 200) } });
 			throw e;
 		}
+		const { text: body, stickerKey } = extractSticker(raw);
+		const entry = stickerKey ? this.stickers.list({ ownedOnly: true }).find((e) => e.sticker_id === stickerKey) : undefined;
+		const sticker: StickerRef | null = entry ? { package_id: entry.package_id, sticker_id: entry.sticker_id, version: entry.version } : null;
 		const k = this.#opts.getKey();
-		const out = sanitizeReply(raw, { secrets: [...(k ? [k] : []), ...(this.#opts.secrets?.() ?? [])], historyHasUrl: historyHasUrl(history) });
-		const flags = [...out.flags, ...(hits.length ? ["injection_suspected"] : [])];
-		this.audit.log(actor, "suggestion_generated", { chatId, detail: { flags, hits, text: redact(out.text) } });
-		return { text: out.text, flags, injection_hits: hits };
+		const secrets = [...(k ? [k] : []), ...(this.#opts.secrets?.() ?? [])];
+		let text = "";
+		let flags: string[] = [];
+		let style: Suggestion["style"] = { method: "none", changed: false, before: 0, after: 0 };
+		if (body || !sticker) {
+			const out = sanitizeReply(body, { secrets, historyHasUrl: historyHasUrl(history) });
+			text = out.text;
+			flags = out.flags;
+			if (b.cfg.style_lieflat) {
+				const r = await lieflat.apply(text, { llm: (m) => this.provider().chat(m, { maxTokens: 400 }) });
+				// 改寫後再過一次輸出檢查；不通過就保留原句
+				try {
+					const re = sanitizeReply(r.text, { secrets, historyHasUrl: historyHasUrl(history) });
+					text = re.text;
+					flags = [...new Set([...flags, ...re.flags])];
+					style = { method: r.method, changed: r.changed, before: r.before.length, after: r.after.length };
+				} catch {
+					style = { method: "llm_rejected", changed: false, before: r.before.length, after: r.before.length };
+				}
+			}
+		}
+		if (stickerKey && !sticker) flags.push("unknown_sticker_dropped");
+		if (hits.length) flags.push("injection_suspected");
+		this.audit.log(actor, "suggestion_generated", { chatId, detail: { flags, hits, text: redact(text), sticker: sticker?.sticker_id, style: style.method } });
+		return { text, sticker, flags, injection_hits: hits, style };
 	}
 
 	/** 產生建議並放進確認佇列（UI「取得建議」與 suggest 模式使用） */
 	async suggestToQueue(chatId: string, actor: Actor, origin: "suggest" | "ui", instruction?: string | null, replyTo?: string | null): Promise<OutboxItem> {
-		const s = await this.suggest(chatId, actor, instruction);
+		const s = await this.suggest(chatId, actor, instruction, replyTo);
 		this.outbox.supersede(chatId, ["suggest", "auto"]);
-		return this.outbox.enqueue({ chatId, kind: "text", text: s.text, origin, replyTo, flags: s.flags, forcePending: true }, actor).item;
+		return this.outbox.enqueue({ chatId, ...suggestionPayload(s), origin, replyTo, flags: s.flags, forcePending: true }, actor).item;
 	}
 
 	/** 生成圖片並排入佇列。先檢查圖片權限才呼叫供應商（避免浪費額度）。 */
@@ -194,6 +254,7 @@ export class AiService {
 	onNewMessages(msgs: { chatId: string; id: string; fromSelf: boolean }[]): void {
 		const byChat = new Map<string, string>();
 		for (const m of msgs) if (!m.fromSelf) byChat.set(m.chatId, m.id);
+		if (this.driver !== "builtin") return;
 		for (const [chatId, lastId] of byChat) {
 			const b = this.policy.checkBasic(chatId, "text");
 			if (!b.ok) continue;
@@ -217,7 +278,7 @@ export class AiService {
 			const b = this.policy.checkBasic(chatId, "text");
 			if (!b.ok) return null;
 			const cfg = b.cfg;
-			if (!this.hasKey()) return null;
+			if (this.driver !== "builtin" || !this.hasKey()) return null;
 			if (!inActiveHours(this.policy.clock.minuteOfDay(this.policy.clock.now()), cfg.active_start, cfg.active_end)) {
 				this.audit.log("auto", "skipped_outside_active_hours", { chatId });
 				return null;
@@ -228,12 +289,12 @@ export class AiService {
 			const origin = cfg.mode === "auto" ? "auto" : "suggest";
 			this.outbox.supersede(chatId, ["suggest", "auto"]);
 			try {
-				return this.outbox.enqueue({ chatId, kind: "text", text: s.text, origin, replyTo: triggerId, flags: s.flags, forcePending: cfg.mode !== "auto" }, "auto").item;
+				return this.outbox.enqueue({ chatId, ...suggestionPayload(s), origin, triggerId, flags: s.flags, forcePending: cfg.mode !== "auto" }, "auto").item;
 			} catch (e) {
 				// 自動路徑被上限 / 間隔擋下 → 改放確認佇列讓使用者決定，並記錄原因
 				const reason = (e as { reason?: string }).reason;
 				if (reason === "rate_interval" || reason === "hourly_cap" || reason === "chat_daily_cap" || reason === "daily_cap") {
-					return this.outbox.enqueue({ chatId, kind: "text", text: s.text, origin, replyTo: triggerId, flags: [...s.flags, `limited:${reason}`], forcePending: true }, "auto").item;
+					return this.outbox.enqueue({ chatId, ...suggestionPayload(s), origin, triggerId, flags: [...s.flags, `limited:${reason}`], forcePending: true }, "auto").item;
 				}
 				throw e;
 			}
@@ -242,8 +303,67 @@ export class AiService {
 		}
 	}
 
+	// ---- 社群貼文草稿（只草稿，不發布）--------------------------------------
+	voice(): VoiceCard {
+		try {
+			return { ...DEFAULT_VOICE, ...(JSON.parse(this.store.getSetting("social_voice") ?? "{}") as Partial<VoiceCard>) };
+		} catch {
+			return DEFAULT_VOICE;
+		}
+	}
+	setVoice(v: Partial<VoiceCard>): VoiceCard {
+		const cur = this.voice();
+		const clip = (x: unknown, n: number) => String(x ?? "").slice(0, n);
+		const next: VoiceCard = {
+			tone: clip(v.tone ?? cur.tone, 100),
+			length: clip(v.length ?? cur.length, 100),
+			opening: clip(v.opening ?? cur.opening, 100),
+			ending: clip(v.ending ?? cur.ending, 100),
+			banned: clip(v.banned ?? cur.banned, 200),
+			samples: (v.samples ?? cur.samples ?? []).slice(0, 3).map((x) => clip(x, 800)),
+		};
+		this.store.setSetting("social_voice", JSON.stringify(next));
+		return next;
+	}
+
+	/** 需要：AI 總開關 + 會話同時在 MCP 白名單與 AI 白名單。kill switch 不影響（不會發送任何東西）。 */
+	async draftSocialPost(input: { chatId: string; platform: Platform; mode: "A" | "B" | "C"; note?: string | null; limit?: number }, actor: Actor): Promise<{ id: number; text: string; warnings: string[] }> {
+		if (!this.policy.aiEnabled) throw denyError("ai_disabled");
+		const chat = this.store.getChat(input.chatId);
+		if (!chat || chat.allowed !== 1) throw denyError("chat_not_allowed");
+		if (!this.policy.get(input.chatId).ai_allowed) throw denyError("ai_not_allowed");
+		if (!["facebook", "instagram", "threads", "x"].includes(input.platform)) throw new Error("unknown platform");
+		const messages = this.#history(input.chatId, Math.min(80, input.limit ?? 40));
+		const participantNames = [...new Set(messages.filter((m) => !m.fromSelf).map((m) => m.sender))];
+		const pin = { platform: input.platform, mode: input.mode, chatName: chat.name, messages, participantNames, voice: this.voice(), note: input.note };
+		const raw = await this.provider().chat(socialPost.buildPrompt(pin), { maxTokens: 900 });
+		const pp = socialPost.postProcess(raw, pin);
+		const lf = await lieflat.apply(pp.text, { llm: (m) => this.provider().chat(m, { maxTokens: 1200 }) });
+		const r = this.store.db
+			.prepare("INSERT INTO social_draft(chat_id, platform, mode, text, warnings, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+			.run(input.chatId, input.platform, input.mode, lf.text, JSON.stringify(pp.warnings), Date.now());
+		this.audit.log(actor, "social_draft_created", { chatId: input.chatId, detail: { platform: input.platform, mode: input.mode, warnings: pp.warnings.length } });
+		return { id: Number(r.lastInsertRowid), text: lf.text, warnings: pp.warnings };
+	}
+
+	socialDrafts(limit = 20): { id: number; chat_id: string | null; platform: string; mode: string; text: string; warnings: string[]; created_at: number }[] {
+		return (this.store.db.prepare("SELECT * FROM social_draft ORDER BY id DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map((r) => ({
+			...(r as unknown as { id: number; chat_id: string | null; platform: string; mode: string; text: string; created_at: number }),
+			warnings: JSON.parse(String(r.warnings ?? "[]")) as string[],
+		}));
+	}
+
 	stop(): void {
 		for (const t of this.#timers.values()) clearTimeout(t);
 		this.#timers.clear();
 	}
+}
+
+function toItem(m: MessageRow): HistoryItem {
+	return { id: m.id, sender: m.sender_name ?? m.sender_mid ?? "?", fromSelf: m.from_self === 1, text: m.text, type: m.content_type, at: m.sent_at };
+}
+
+function suggestionPayload(s: Suggestion): { kind: "text" | "sticker"; text: string | null; sticker: StickerRef | null } {
+	if (s.sticker) return { kind: "sticker", text: s.text || null, sticker: s.sticker };
+	return { kind: "text", text: s.text, sticker: null };
 }

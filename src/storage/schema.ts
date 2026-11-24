@@ -159,4 +159,25 @@ CREATE TABLE IF NOT EXISTS scam_alert (
   UNIQUE(chat_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS scam_alert_ts ON scam_alert(created_at);
+
+-- 反詐即時提醒（每群組；預設關）
+CREATE TABLE IF NOT EXISTS scam_warn (
+  chat_id      TEXT PRIMARY KEY REFERENCES chat(id),
+  enabled      INTEGER NOT NULL DEFAULT 0,
+  min_level    TEXT    NOT NULL DEFAULT 'high', -- high | suspicious
+  cooldown_min INTEGER NOT NULL DEFAULT 30,     -- 同一發送者＋同類型多久內不重複提醒
+  daily_cap    INTEGER NOT NULL DEFAULT 10,
+  updated_at   INTEGER NOT NULL
+);
+
+-- 社群貼文草稿（只存草稿，App 不會發布）
+CREATE TABLE IF NOT EXISTS social_draft (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id     TEXT,
+  platform    TEXT    NOT NULL,
+  mode        TEXT    NOT NULL,
+  text        TEXT    NOT NULL,
+  warnings    TEXT,
+  created_at  INTEGER NOT NULL
+);
 `;
