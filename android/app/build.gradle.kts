@@ -24,6 +24,15 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    // 每個 ABI 各出一個 APK：arm64-v8a（真機）、x86_64（模擬器）
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
+        }
+    }
     // libnode.so 必須解壓到 nativeLibraryDir 才能 exec（Android 10+ W^X 限制）
     packaging { jniLibs { useLegacyPackaging = true } }
 }
