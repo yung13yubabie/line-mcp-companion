@@ -46,6 +46,8 @@ class NodeService : Service() {
                     put("LINE_CONTROL_TOKEN", Secrets.controlToken(this@NodeService))
                     put("HOME", filesDir.absolutePath)
                     put("TMPDIR", cacheDir.absolutePath)
+                    // bionic 下 Node 讀不到系統時區（實測 Etc/Unknown），由 Java 傳入
+                    put("TZ", java.util.TimeZone.getDefault().id)
                 }
                 val p = pb.start().also { proc = it }
                 val logFile = File(filesDir, "node.log")
