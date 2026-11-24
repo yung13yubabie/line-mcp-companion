@@ -1,7 +1,7 @@
 {
   "name": "line-mcp-app",
   "version": "0.1.0",
-  "description": "LINE \u6b21\u8981\u88dd\u7f6e\u540c\u6b65 + \u672c\u6a5f MCP\uff08Android App \u6838\u5fc3\uff09",
+  "description": "LINE 次要裝置同步 + 本機 MCP（Android App 核心）",
   "scripts": {
     "test": "node --test test/*.test.ts",
     "login:qr": "node scripts/login-poc.ts",
@@ -10,7 +10,9 @@
     "bundle:android": "bun scripts/bundle.ts",
     "android:debug": "npm run bundle:android && cd android && ./gradlew assembleDebug",
     "start": "node src/main.ts",
-    "bundle:android:release": "bun scripts/bundle.ts --release && bash scripts/purge-mock-check.sh android/app/src/main/assets/nodeapp/main.mjs"
+    "bundle:android:release": "bun scripts/bundle.ts --release && bash scripts/purge-mock-check.sh android/app/src/main/assets/nodeapp/main.mjs",
+    "android:release": "npm run bundle:android:release && cd android && ./gradlew assembleRelease && for f in app/build/outputs/apk/release/*.apk; do bash ../scripts/purge-mock-check.sh $f; done",
+    "mcp:interop": "node scripts/mcp-interop.mjs"
   },
   "license": "UNLICENSED",
   "type": "module",

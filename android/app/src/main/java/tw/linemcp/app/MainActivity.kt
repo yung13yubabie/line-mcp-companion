@@ -67,7 +67,9 @@ class MainActivity : ComponentActivity() {
                 value = withContext(Dispatchers.IO) { Secrets.controlToken(ctx) to Secrets.mcpToken(ctx) }
             }
             MaterialTheme(colorScheme = lightColorScheme(primary = LineGreen)) {
-                tokens?.let { AppRoot(ControlClient(it.first), it.second) } ?: Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("準備中…") }
+                tokens?.let { AppRoot(ControlClient(it.first), it.second) } ?: Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) { CircularProgressIndicator(); Text("準備中…") }
+                }
             }
         }
     }
@@ -128,7 +130,7 @@ fun LoginScreen(state: JSONObject?, onQr: () -> Unit, onSettings: () -> Unit) {
         TopBar("LINE MCP", action = { Text("設定", color = LineGreen, modifier = Modifier.clickable { onSettings() }) })
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when (state?.optString("phase")) {
-                null -> Text("啟動本機服務中…")
+                null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) { CircularProgressIndicator(Modifier.size(24.dp)); Text("啟動本機服務中…") }
                 "waiting_qr_scan" -> {
                     Text("請用手機 LINE 掃描（從另一台裝置顯示此畫面）")
                     state.optString("qrUrl").takeIf { it.isNotEmpty() }?.let { QrImage(it) }
@@ -147,7 +149,7 @@ fun LoginScreen(state: JSONObject?, onQr: () -> Unit, onSettings: () -> Unit) {
 @Composable
 fun Avatar(name: String, group: Boolean) {
     Box(Modifier.size(48.dp).clip(CircleShape).background(if (group) Color(0xFF9FB3C8) else Color(0xFFB8D8A0)), contentAlignment = Alignment.Center) {
-        Text(name.trim().firstOrNull()?.toString() ?: "?", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Text(name.firstOrNull { it.isLetterOrDigit() }?.toString() ?: "?", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
     }
 }
 
@@ -182,6 +184,7 @@ fun ChatListScreen(state: JSONObject, chats: List<ChatItem>, onToggle: (ChatItem
 fun ChatRoomScreen(client: ControlClient, chat: ChatItem, onBack: () -> Unit) {
     var msgs by remember { mutableStateOf(listOf<Msg>()) }
     var aiMode by remember { mutableStateOf(false) }
+    var loaded by remember { mutableStateOf(false) }
     LaunchedEffect(chat.id) {
         msgs = runCatching {
             val a = client.messages(chat.id)
@@ -190,6 +193,7 @@ fun ChatRoomScreen(client: ControlClient, chat: ChatItem, onBack: () -> Unit) {
                     it.optString("content_type"), if (it.isNull("text")) null else it.getString("text"), if (it.isNull("media_name")) null else it.getString("media_name"))
             } }
         }.getOrDefault(emptyList())
+        loaded = true
     }
     Column(Modifier.fillMaxSize().background(LineBg)) {
         TopBar(chat.name, onBack = onBack)
@@ -198,6 +202,7 @@ fun ChatRoomScreen(client: ControlClient, chat: ChatItem, onBack: () -> Unit) {
             Text("AI 代聊（階段 5）", fontSize = 12.sp)
             Switch(checked = aiMode, onCheckedChange = { aiMode = it }, enabled = false)
         }
+        if (!loaded) LinearProgressIndicator(Modifier.fillMaxWidth(), color = LineGreen)
         LazyColumn(Modifier.weight(1f).padding(horizontal = 10.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
             items(msgs, key = { it.id }) { m ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (m.fromSelf) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
@@ -272,11 +277,14 @@ fun SettingsScreen(client: ControlClient, mcpToken: String, onBack: () -> Unit) 
 
 @Composable
 fun QrImage(url: String) {
-    val bmp = remember(url) {
-        val m = QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 640, 640)
-        Bitmap.createBitmap(m.width, m.height, Bitmap.Config.RGB_565).also { b ->
-            for (x in 0 until m.width) for (y in 0 until m.height) b.setPixel(x, y, if (m[x, y]) 0xFF000000.toInt() else 0xFFFFFFFF.toInt())
+    // QR 編碼 + 點陣轉換是 CPU 工作：放到 Dispatchers.Default，並用 setPixels 一次寫入（原本 640×640 次 setPixel 在主執行緒）
+    val bmp by produceState<Bitmap?>(null, url) {
+        value = withContext(Dispatchers.Default) {
+            val m = QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 640, 640)
+            val px = IntArray(m.width * m.height) { i -> if (m[i % m.width, i / m.width]) 0xFF000000.toInt() else 0xFFFFFFFF.toInt() }
+            Bitmap.createBitmap(px, m.width, m.height, Bitmap.Config.RGB_565)
         }
     }
-    Image(bmp.asImageBitmap(), contentDescription = "LINE 登入 QR", modifier = Modifier.size(280.dp))
+    bmp?.let { Image(it.asImageBitmap(), contentDescription = "LINE 登入 QR", modifier = Modifier.size(280.dp)) }
+        ?: Box(Modifier.size(280.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
 }
