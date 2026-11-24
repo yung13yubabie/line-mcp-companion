@@ -4,7 +4,7 @@ set -euo pipefail
 f=$1
 if [[ "$f" == *.apk ]]; then t=$(mktemp -d); unzip -q -o "$f" 'assets/nodeapp/*' -d "$t"; f="$t/assets/nodeapp/main.mjs"; fi
 bad=0
-for pat in LMA_MOCK_DATA_v1 u_mock_ 林家家族群組 c_mock_; do
+for pat in LMA_MOCK_DATA_v1 LMA_MOCK_AI_v1 u_mock_ 社區住戶交流群 c_mock_ MockAiProvider.calls 滷肉; do
   if grep -q "$pat" "$f"; then echo "FAIL: mock marker '$pat' found in $f"; bad=1; fi
 done
 [ $bad = 0 ] && echo "OK: no mock data in $f"

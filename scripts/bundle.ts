@@ -12,7 +12,7 @@ const r = await Bun.build({
 	minify: release ? { syntax: true, whitespace: false, identifiers: false } : false,
 	define: release ? { "process.env.LMA_INCLUDE_MOCK": '"0"' } : {},
 	plugins: release
-		? [{ name: "strip-mock", setup(b) { b.onResolve({ filter: /mock-source(\.ts)?$/ }, () => ({ path: resolve("src/mock/mock-stub.ts") })); } }]
+		? [{ name: "strip-mock", setup(b) { b.onResolve({ filter: /mock-source(\.ts)?$/ }, () => ({ path: resolve("src/mock/mock-stub.ts") })); b.onResolve({ filter: /mock-ai(\.ts)?$/ }, () => ({ path: resolve("src/mock/mock-ai-stub.ts") })); } }]
 		: [],
 });
 if (!r.success) { console.error(r.logs); process.exit(1); }

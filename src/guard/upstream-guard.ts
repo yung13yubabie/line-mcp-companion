@@ -11,13 +11,25 @@
  * 2. E2EE 金鑰註冊：預設封鎖（與 line-mcp-server docs/architecture.md「E2EE key boundaries」相同理由），
  *    避免 QR 登入沒收到金鑰時 LINEJS 自動註冊新金鑰對（base/login/mod.ts:302-304）。
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export const READ_RECEIPT_METHODS = new Set(["sendChatChecked", "markAsRead", "markChatsAsRead", "markThreadsAsRead"]);
+/** 會從使用者帳號送出 / 修改訊息的 RPC：只能在 withSendPermit() 內呼叫（也就是只有 Outbox 的 sender 能送） */
+export const SEND_METHODS = new Set(["sendMessage", "sendMessageAwaitCommit", "unsendMessage", "sendPostback", "react", "sendChatRemoved"]);
+const sendPermit = new AsyncLocalStorage<boolean>();
+/** 只有 LinejsSender 會用：在這個 callback 範圍內才允許 SEND_METHODS */
+export function withSendPermit<T>(fn: () => Promise<T>): Promise<T> {
+	return sendPermit.run(true, fn);
+}
+export function hasSendPermit(): boolean {
+	return sendPermit.getStore() === true;
+}
 export const KEY_REGISTRATION_METHODS = new Set(["registerE2EEPublicKey", "registerE2EEPublicKeyV2", "registerE2EEGroupKey"]);
 
 export class UpstreamBlockedError extends Error {
-	readonly code: "read_receipt_blocked" | "key_registration_blocked";
+	readonly code: "read_receipt_blocked" | "key_registration_blocked" | "send_blocked";
 	readonly method: string;
-	constructor(code: "read_receipt_blocked" | "key_registration_blocked", method: string) {
+	constructor(code: "read_receipt_blocked" | "key_registration_blocked" | "send_blocked", method: string) {
 		super(`${method} is blocked by line-mcp-app (${code})`);
 		this.code = code;
 		this.method = method;
@@ -37,6 +49,7 @@ export interface GuardOptions {
 export interface GuardableClient {
 	request: { request: (value: unknown, methodName: string, ...rest: unknown[]) => Promise<unknown> };
 	e2ee?: { registerE2EEKeyPair?: (...a: unknown[]) => Promise<unknown> };
+	obs?: { uploadObjTalk?: (...a: unknown[]) => Promise<unknown>; uploadMediaByE2EE?: (...a: unknown[]) => Promise<unknown> };
 }
 
 export function installUpstreamGuards(base: GuardableClient, opts: GuardOptions = {}): void {
@@ -54,6 +67,10 @@ export function installUpstreamGuards(base: GuardableClient, opts: GuardOptions 
 			log({ event: "blocked", method: methodName });
 			throw new UpstreamBlockedError("key_registration_blocked", methodName);
 		}
+		if (SEND_METHODS.has(methodName) && !hasSendPermit()) {
+			log({ event: "blocked", method: methodName });
+			throw new UpstreamBlockedError("send_blocked", methodName);
+		}
 		log({ event: "call", method: methodName });
 		return await original(value, methodName, ...rest);
 	};
@@ -68,6 +85,20 @@ export function installUpstreamGuards(base: GuardableClient, opts: GuardOptions 
 				throw new UpstreamBlockedError("key_registration_blocked", "registerE2EEKeyPair");
 			}
 			return await reg(...a);
+		};
+	}
+
+	// 上傳到聊天室（uploadObjTalk 帶 tomid 時會直接在聊天室出現圖片）也只允許在 sender 內
+	for (const fn of ["uploadObjTalk", "uploadMediaByE2EE"] as const) {
+		const orig = base.obs?.[fn];
+		if (!orig) continue;
+		const bound = orig.bind(base.obs);
+		base.obs![fn] = async (...a: unknown[]) => {
+			if (!hasSendPermit()) {
+				log({ event: "blocked", method: fn });
+				throw new UpstreamBlockedError("send_blocked", fn);
+			}
+			return await bound(...a);
 		};
 	}
 }

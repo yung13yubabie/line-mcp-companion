@@ -5,3 +5,4 @@ export class MockSource {
 	}
 }
 export const MOCK_DEFAULT_ALLOWED: string[] = [];
+export const MOCK_AI_ALLOWED: string[] = [];

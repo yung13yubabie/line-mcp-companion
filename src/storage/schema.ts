@@ -2,7 +2,7 @@
  * SQLite 結構（node:sqlite，WAL）。
  * message_fts 使用 FTS5 trigram，可直接搜尋中文；少於 3 字元的查詢改用 instr()。
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -77,4 +77,86 @@ CREATE TABLE IF NOT EXISTS media (
 );
 
 CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+-- ===== 階段 5：AI 代聊 =====
+-- 每個會話的 AI 設定。沒有資料列 = 全部關閉（安全預設）。只有白名單會話能生效。
+CREATE TABLE IF NOT EXISTS chat_ai (
+  chat_id          TEXT PRIMARY KEY REFERENCES chat(id),
+  ai_allowed       INTEGER NOT NULL DEFAULT 0,     -- AI 代聊白名單（與 MCP 白名單分開；兩者都要勾）
+  mode             TEXT    NOT NULL DEFAULT 'off', -- off | suggest（僅建議回覆）| auto（AI 代聊）
+  style_lieflat    INTEGER NOT NULL DEFAULT 1,     -- 去 AI 味檢查 / 改寫（預設開）
+  allow_image      INTEGER NOT NULL DEFAULT 0,     -- 允許生成圖片並發送
+  confirm_send     INTEGER NOT NULL DEFAULT 1,     -- 發送前確認（預設開）
+  min_interval_sec INTEGER NOT NULL DEFAULT 300,   -- 兩次 AI 發送最短間隔
+  delay_sec        INTEGER NOT NULL DEFAULT 30,    -- 自動回覆延遲
+  max_per_hour     INTEGER NOT NULL DEFAULT 4,
+  max_per_day      INTEGER NOT NULL DEFAULT 10,
+  active_start     INTEGER,                         -- 活躍時段（當地分鐘 0-1439）；NULL = 不限
+  active_end       INTEGER,
+  updated_at       INTEGER NOT NULL
+);
+
+-- 待送 / 已送 / 被拒的 AI 訊息（確認佇列）
+CREATE TABLE IF NOT EXISTS outbox (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id       TEXT    NOT NULL,
+  kind          TEXT    NOT NULL,              -- text | image | sticker
+  text          TEXT,                          -- 文字內容或圖片說明
+  sticker_json  TEXT,                          -- {"package_id","sticker_id","version"}
+  prompt        TEXT,                          -- 圖片提示詞
+  image_path    TEXT,
+  origin        TEXT    NOT NULL,              -- auto | suggest | mcp | ui
+  origin_detail TEXT,                          -- 例如 MCP client 名稱
+  reply_to      TEXT,                          -- 引用回覆的訊息 id（LINE relatedMessageId）
+  trigger_id    TEXT,                          -- 觸發自動回覆的訊息 id
+  status        TEXT    NOT NULL,              -- pending | approved | sent | rejected | failed | expired
+  flags         TEXT,                          -- injection_suspected,...
+  created_at    INTEGER NOT NULL,
+  scheduled_at  INTEGER,
+  decided_at    INTEGER,
+  sent_at       INTEGER,
+  error         TEXT
+);
+CREATE INDEX IF NOT EXISTS outbox_status ON outbox(status, scheduled_at);
+
+-- 稽核紀錄（不含祕密；訊息內容截斷）
+CREATE TABLE IF NOT EXISTS audit_log (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts      INTEGER NOT NULL,
+  actor   TEXT    NOT NULL,                    -- ui | mcp | auto | system
+  action  TEXT    NOT NULL,
+  chat_id TEXT,
+  ok      INTEGER NOT NULL DEFAULT 1,
+  detail  TEXT
+);
+CREATE INDEX IF NOT EXISTS audit_ts ON audit_log(ts);
+
+-- ===== 群組反詐 =====
+-- 範例庫：內建（來自 anti-scam-helper，Apache-2.0）＋ 使用者 / MCP 新增
+CREATE TABLE IF NOT EXISTS scam_sample (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  label      TEXT    NOT NULL,                 -- SCAM | OK
+  category   TEXT    NOT NULL,
+  text       TEXT    NOT NULL,
+  source     TEXT    NOT NULL,                 -- builtin | user | mcp
+  created_at INTEGER NOT NULL,
+  UNIQUE(label, text)
+);
+-- 警示：只標記，不回覆、不採取任何動作
+CREATE TABLE IF NOT EXISTS scam_alert (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id      TEXT    NOT NULL,
+  message_id   TEXT    NOT NULL,
+  score        INTEGER NOT NULL,
+  level        TEXT    NOT NULL,              -- suspicious | high
+  rules        TEXT    NOT NULL,              -- JSON 陣列：命中規則
+  sample_id    INTEGER,                       -- 最相似的 SCAM 範例
+  similarity   REAL,
+  ai_verdict   TEXT,                          -- scam | suspicious | ok | NULL（沒有 AI 判讀）
+  ai_reason    TEXT,
+  status       TEXT    NOT NULL DEFAULT 'new',-- new | seen | dismissed
+  created_at   INTEGER NOT NULL,
+  UNIQUE(chat_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS scam_alert_ts ON scam_alert(created_at);
 `;

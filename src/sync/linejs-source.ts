@@ -101,7 +101,8 @@ export class LinejsSource implements LineSource {
 		}
 		const toType = m.toType;
 		const chatId = toType === "USER" || toType === 0 ? (m.from === me ? m.to : m.from) : m.to;
-		const meta = m.contentMetadata ?? null;
+		// contentMetadata（貼圖 STKPKGID/STKID/STKVER、檔名…）＋ 引用回覆的 relatedMessageId
+		const meta: Raw | null = m.contentMetadata || m.relatedMessageId ? { ...(m.contentMetadata ?? {}), ...(m.relatedMessageId ? { relatedMessageId: String(m.relatedMessageId) } : {}) } : null;
 		return {
 			id: String(m.id),
 			chatId,
