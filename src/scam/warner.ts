@@ -170,12 +170,15 @@ export class ScamWarner {
 		return renderNotice(c.template ?? this.template(), { category, tip: CATEGORY_TIPS[category] ?? CATEGORY_TIPS["可疑連結"]! }, admins);
 	}
 
+	#sod(): number {
+		const c = this.#outbox.policy.clock;
+		return c.startOfDay(c.now());
+	}
+
 	#sendCheck(it: OutboxItem): string | null {
 		const c = this.get(it.chat_id);
 		if (!c.enabled) return "scam_warn_disabled";
-		const sod = new Date();
-		sod.setHours(0, 0, 0, 0);
-		const sent = Number((this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND status='sent' AND sent_at >= ?").get(it.chat_id, sod.getTime()) as { n: number }).n);
+		const sent = Number((this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND status='sent' AND sent_at >= ?").get(it.chat_id, this.#sod()) as { n: number }).n);
 		return sent >= c.daily_cap ? "scam_warn_daily_cap" : null;
 	}
 
@@ -199,11 +202,9 @@ export class ScamWarner {
 		if (Number(dupe.n) > 0) return skip("already_warned");
 		const recent = this.#store.db
 			.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND origin_detail=? AND status IN ('approved','sent') AND created_at >= ?")
-			.get(a.chat_id, detail, Date.now() - c.cooldown_min * 60_000) as { n: number };
+			.get(a.chat_id, detail, this.#outbox.policy.clock.now() - c.cooldown_min * 60_000) as { n: number };
 		if (Number(recent.n) > 0) return skip("cooldown");
-		const sod = new Date();
-		sod.setHours(0, 0, 0, 0);
-		const today = Number((this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND status IN ('approved','sent') AND created_at >= ?").get(a.chat_id, sod.getTime()) as { n: number }).n);
+		const today = Number((this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND status IN ('approved','sent') AND created_at >= ?").get(a.chat_id, this.#sod()) as { n: number }).n);
 		if (today >= c.daily_cap) return skip("daily_cap");
 		// 被 @ 的人不能是這則訊息的發送者
 		const admins = c.mention_admins ? this.#detector.admins(a.chat_id).filter((x) => x.mention && x.mid !== sender) : [];
