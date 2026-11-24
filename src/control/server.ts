@@ -20,6 +20,7 @@ export interface ControlDeps {
 	login: () => LoginState;
 	startQrLogin: () => void;
 	logout?: () => Promise<void>;
+	info?: () => Record<string, unknown>;
 }
 
 const SETTING_KEYS = new Set(["read_receipts", "sync_scope", "allow_key_registration"]);
@@ -43,7 +44,21 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 				return send(202, deps.login());
 			}
 			if (req.method === "GET" && url.pathname === "/control/chats") {
-				return send(200, deps.store.listChats().map((c) => ({ id: c.id, type: c.type, name: c.name, allowed: c.allowed === 1, last_message_at: c.last_message_at })));
+				return send(
+					200,
+					deps.store.listChats().map((c) => {
+						const last = deps.store.getMessages(c.id, { limit: 1 })[0];
+						const preview = last ? (last.text ?? (last.content_type === "IMAGE" ? "[圖片]" : last.content_type === "FILE" ? `[檔案] ${last.media_name ?? ""}` : `[${last.content_type}]`)) : "";
+						return { id: c.id, type: c.type, name: c.name, allowed: c.allowed === 1, last_message_at: c.last_message_at, preview, member_count: c.member_count };
+					}),
+				);
+			}
+			if (req.method === "GET" && url.pathname === "/control/info") return send(200, deps.info?.() ?? {});
+			if (req.method === "GET" && url.pathname === "/control/messages") {
+				// UI 自己的檢視（使用者本人），不受 MCP 白名單限制；同樣不呼叫任何已讀 API
+				const chatId = url.searchParams.get("chat_id") ?? "";
+				const rows = deps.store.getMessages(chatId, { limit: Number(url.searchParams.get("limit") ?? 100) });
+				return send(200, rows.reverse());
 			}
 			if (req.method === "POST" && url.pathname === "/control/chats/allow") {
 				const b = await body(req);
