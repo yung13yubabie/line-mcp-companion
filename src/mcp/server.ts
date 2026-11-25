@@ -128,7 +128,7 @@ export class TokenBucket {
 }
 
 function authorized(req: IncomingMessage, token?: string): boolean {
-	if (!token) return true;
+	if (!token) return false;
 	const h = req.headers.authorization ?? "";
 	const want = Buffer.from(`Bearer ${token}`);
 	const got = Buffer.from(h);
@@ -165,9 +165,14 @@ function sendCalls(body: unknown): number {
 	return arr.filter((m) => m && typeof m === "object" && (m as { method?: string }).method === "tools/call" && SEND_SET.has(String((m as { params?: { name?: string } }).params?.name))).length;
 }
 
+export const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+
 export async function startMcpHttp(ctx: ToolContext, opts: HttpOptions = {}): Promise<{ server: Server; url: string; stats: () => McpStats }> {
 	const host = opts.host ?? "127.0.0.1";
+	// 只綁 loopback；必須有 token（絕不提供未驗證的服務）
+	if (!LOOPBACK.has(host)) throw new Error("MCP server must bind to a loopback address");
 	const getToken = opts.getToken ?? (() => opts.token);
+	if (!getToken() || String(getToken()).length < 16) throw new Error("MCP token is required (>= 16 chars)");
 	const bucket = new TokenBucket(opts.ratePerMin ?? 120);
 	const sendBucket = new TokenBucket(opts.sendRatePerMin ?? 10);
 	const maxBody = opts.maxBodyBytes ?? 256 * 1024;

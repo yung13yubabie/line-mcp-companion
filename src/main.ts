@@ -3,15 +3,18 @@
  * 環境變數：
  *   LINE_MCP_HOME        資料目錄（Android：context.filesDir），內含 line.db 與 media/
  *   LINE_MCP_PORT        MCP 埠（預設 47823）
- *   LINE_MCP_TOKEN       MCP Bearer token（建議必設；執行中可由 UI 輪換）
+ *   LINE_MCP_TOKEN       MCP Bearer token（沒設 → 自動產生並只印一次；執行中可由 UI 輪換）
  *   LINE_CONTROL_PORT    控制 API 埠（預設 47824）
- *   LINE_CONTROL_TOKEN   控制 API token（必設）
+ *   LINE_CONTROL_TOKEN   控制 API token（沒設 → 自動產生並只印一次）
+ *   LMA_DATA_KEY         Android：Keystore 解開的資料金鑰（base64 32 bytes），用來加密 SQLite 裡的 LINE token / E2EE 金鑰
+ *   LMA_PASSPHRASE       桌面 / 開發：沒有 LMA_DATA_KEY 時必設（≥12 字），否則拒絕啟動（mock 模式除外）
  *   LMA_AI_KEY           （選用）AI API key；讀入記憶體後立即從環境變數移除。也可由 UI 經控制 API 設定。
  */
 import { join } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { openDatabase } from "./storage/db.ts";
+import { resolveDataKey } from "./storage/data-key.ts";
 import { Whitelist } from "./whitelist.ts";
 import { Session } from "./auth/session.ts";
 import { SyncEngine } from "./sync/engine.ts";
@@ -38,17 +41,35 @@ const MOCK = process.env.LMA_INCLUDE_MOCK !== "0" && process.env.LINE_MCP_MOCK =
 const home = MOCK ? join(rootHome, "mock") : rootHome;
 const store = openDatabase(join(home, "line.db"));
 const whitelist = new Whitelist(store);
-const session = new Session(store);
+let dataKey: ReturnType<typeof resolveDataKey>;
+try {
+	dataKey = resolveDataKey(store, process.env, { mock: MOCK });
+} catch (e) {
+	console.error((e as Error).message);
+	process.exit(78); // EX_CONFIG
+}
+if (dataKey.migrated) console.error(JSON.stringify({ event: "secrets_migrated", rows: dataKey.migrated }));
+const session = new Session(store, dataKey.box);
 let state: LoginState = { phase: "logged_out" };
 
 // ---- 秘密只放記憶體 ----
 let aiKey: string | undefined = process.env.LMA_AI_KEY || undefined;
 delete process.env.LMA_AI_KEY;
-let mcpToken: string | undefined = process.env.LINE_MCP_TOKEN || undefined;
+// 沒設 token 就自動產生隨機 token 並只印一次（stderr）；絕不提供未驗證的服務
+const genToken = () => randomBytes(24).toString("base64url");
+let mcpToken: string = process.env.LINE_MCP_TOKEN || "";
+const controlToken: string = process.env.LINE_CONTROL_TOKEN || genToken();
+if (!process.env.LINE_CONTROL_TOKEN) console.error(JSON.stringify({ event: "generated_token", which: "control", token: controlToken, note: "shown once" }));
+if (!mcpToken) {
+	mcpToken = genToken();
+	console.error(JSON.stringify({ event: "generated_token", which: "mcp", token: mcpToken, note: "shown once" }));
+}
+if (controlToken.length < 16 || mcpToken.length < 16) {
+	console.error("refusing to start: tokens must be at least 16 characters");
+	process.exit(78);
+}
 delete process.env.LINE_MCP_TOKEN;
-const controlToken = process.env.LINE_CONTROL_TOKEN;
 delete process.env.LINE_CONTROL_TOKEN;
-if (!controlToken) throw new Error("LINE_CONTROL_TOKEN is required");
 
 // ---- AI / 反詐 ----
 const audit = new Audit(store);
@@ -60,7 +81,7 @@ const ai = new AiService(store, policy, outbox, audit, {
 	getKey: () => aiKey,
 	allowMock: MOCK,
 	providerFactory: (cfg, getKey) => (cfg.provider === "mock" && mockAi ? new mockAi.MockAiProvider() : new OpenAICompatProvider(cfg, getKey)),
-	secrets: () => [mcpToken, controlToken].filter((x): x is string => !!x),
+	secrets: () => [mcpToken, controlToken],
 });
 const scam = new ScamDetector(store);
 scam.seedBuiltin();
@@ -183,13 +204,14 @@ const control = await startControlHttp(
 		warner,
 		setAiKey: (k) => void (aiKey = k ?? undefined),
 		mcpStats: () => mcpStats?.() ?? null,
-		rotateMcpToken: () => (mcpToken = randomBytes(24).toString("base64url")),
+		rotateMcpToken: () => (mcpToken = genToken()),
 		stickerImage,
 		syncStatus: () => (ctx.sync ? (ctx.sync.status() as unknown as Record<string, unknown>) : null),
 		info: () => ({
 			mock: MOCK,
 			mcp_url: `http://127.0.0.1:${mcpPort}/mcp`,
-			mcp_auth: mcpToken ? "bearer" : "none",
+			mcp_auth: "bearer",
+			data_key: dataKey.source,
 			transport: "streamable-http",
 			read_receipts: store.getSetting("read_receipts") === "on" ? "enabled" : "blocked",
 			counts: store.counts(),

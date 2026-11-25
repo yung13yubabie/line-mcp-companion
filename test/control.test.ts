@@ -12,9 +12,9 @@ test("控制 API：需 token、可勾選會話與改設定", async () => {
 	let st: LoginState = { phase: "logged_out" };
 	const { server, url } = await startControlHttp(
 		{ store, whitelist, login: () => st, startQrLogin: () => void (st = { phase: "waiting_qr_scan", qrUrl: "https://line.me/R/au/lgn/sq/TEST" }) },
-		{ port: 0, token: "ct" },
+		{ port: 0, token: "ct-0123456789abcdef" },
 	);
-	const h = { authorization: "Bearer ct", "content-type": "application/json" };
+	const h = { authorization: "Bearer ct-0123456789abcdef", "content-type": "application/json" };
 	try {
 		assert.equal((await fetch(`${url}/state`)).status, 401);
 		const q = await (await fetch(`${url}/login/qr`, { method: "POST", headers: h })).json();

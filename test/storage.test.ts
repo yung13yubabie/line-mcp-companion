@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase } from "../src/storage/db.ts";
 import { SqliteKvStorage } from "../src/storage/kv-storage.ts";
+import { SecretBox } from "../src/storage/secret-box.ts";
+import { randomBytes } from "node:crypto";
 import { SyncEngine } from "../src/sync/engine.ts";
 import { FakeSource, ALICE, GROUP, SECRET, ME, msg } from "./fake-source.ts";
 
@@ -31,7 +33,7 @@ test("insertMessage 冪等，message id 保持字串", () => {
 
 test("SqliteKvStorage 實作 LINEJS BaseStorage（含 bigint）", async () => {
 	const s = openDatabase(":memory:");
-	const kv = new SqliteKvStorage(s);
+	const kv = new SqliteKvStorage(s, new SecretBox(randomBytes(32)));
 	await kv.set("refreshToken", "rt");
 	await kv.set("obj", { a: 1, b: 2n } as never);
 	assert.equal(await kv.get("refreshToken"), "rt");

@@ -1,6 +1,7 @@
 import { BaseClient } from "@evex-dev/linejs/base";
 import type { Store } from "../storage/db.ts";
 import { SqliteKvStorage } from "../storage/kv-storage.ts";
+import type { SecretBox } from "../storage/secret-box.ts";
 import { installUpstreamGuards } from "../guard/upstream-guard.ts";
 
 /**
@@ -19,10 +20,12 @@ export interface QrHandlers {
 export class Session {
 	readonly store: Store;
 	readonly base: BaseClient;
+	readonly kv: SqliteKvStorage;
 
-	constructor(store: Store, opts: { endpoint?: string } = {}) {
+	constructor(store: Store, box: SecretBox, opts: { endpoint?: string } = {}) {
 		this.store = store;
-		const storage = new SqliteKvStorage(store);
+		const storage = new SqliteKvStorage(store, box);
+		this.kv = storage;
 		this.base = new BaseClient({ device: DEVICE, storage, endpoint: opts.endpoint });
 		installUpstreamGuards(this.base as never, {
 			isReadReceiptEnabled: () => store.getSetting("read_receipts") === "on",
@@ -34,15 +37,12 @@ export class Session {
 		// LINEJS 不會自己保存 authToken（docs/docs/auth.md「Persisting authToken」），必須監聽 update:authtoken。
 		this.base.on("update:authtoken", (token: string) => {
 			this.base.authToken = token;
-			store.db
-				.prepare("INSERT INTO line_kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-				.run(AUTH_TOKEN_KEY, JSON.stringify(token));
+			storage.setSync(AUTH_TOKEN_KEY, token); // 加密後寫入
 		});
 	}
 
 	savedToken(): string | undefined {
-		const row = this.store.db.prepare("SELECT value FROM line_kv WHERE key = ?").get(AUTH_TOKEN_KEY) as { value: string } | undefined;
-		return row ? (JSON.parse(row.value) as string) : undefined;
+		return this.kv.getSync(AUTH_TOKEN_KEY) as string | undefined;
 	}
 
 	/** QR + PIN 登入（第一次）。 */

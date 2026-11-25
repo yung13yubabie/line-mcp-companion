@@ -98,14 +98,14 @@ test("未讀摘要（本機計算）、附件下載快取、同步狀態、trigg
 
 test("MCP over HTTP（127.0.0.1 + Bearer token）端到端", async () => {
 	const { ctx, dir, store } = await setup();
-	const { server, url } = await startMcpHttp(ctx, { port: 0, token: "test-token" });
+	const { server, url } = await startMcpHttp(ctx, { port: 0, token: "test-token-0123456789" });
 	try {
 		assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
 		const noAuth = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
 		assert.equal(noAuth.status, 401);
 
 		const client = new Client({ name: "test", version: "0" });
-		await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: "Bearer test-token" } } }));
+		await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: "Bearer test-token-0123456789" } } }));
 		const { tools } = await client.listTools();
 		assert.deepEqual(tools.map((t) => t.name).sort(), [...BASIC_TOOLS].sort());
 		const r = (await client.callTool({ name: "search_messages", arguments: { query: "便當" } })) as { content: { text: string }[] };

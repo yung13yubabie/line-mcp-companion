@@ -5,16 +5,17 @@
  *   node scripts/login-poc.ts --exit-after-qr  # 只驗證能拿到 QR URL，不登入任何帳號
  *   node scripts/login-poc.ts --token          # 用上次保存的 token 重新登入（不需掃碼）
  *
- * 狀態存在 ./.state/line.db（含 token 與 E2EE 金鑰，已加入 .gitignore，請勿外流）。
+ * 狀態存在 ./.state/line.db（token 與 E2EE 金鑰以 LMA_PASSPHRASE 衍生的金鑰加密；已加入 .gitignore）。
  * 已讀回條與 E2EE 金鑰註冊預設封鎖（src/guard/upstream-guard.ts）。
  */
 import qrcode from "qrcode-terminal";
 import { openDatabase } from "../src/storage/db.ts";
 import { Session, DEVICE } from "../src/auth/session.ts";
+import { resolveDataKey } from "../src/storage/data-key.ts";
 
 const args = new Set(process.argv.slice(2));
 const store = openDatabase(process.env.LINE_MCP_DB ?? ".state/line.db");
-const session = new Session(store);
+const session = new Session(store, resolveDataKey(store, process.env).box); // 需要 LMA_PASSPHRASE
 
 console.log(`[login-poc] device = ${DEVICE}`);
 try {

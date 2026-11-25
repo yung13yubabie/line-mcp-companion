@@ -95,6 +95,7 @@ function preview(m: { text: string | null; content_type: string; media_name?: st
 }
 
 export async function startControlHttp(deps: ControlDeps, opts: { port?: number; token: string }): Promise<{ server: Server; url: string }> {
+	if (!opts.token || opts.token.length < 16) throw new Error("control token is required (>= 16 chars)");
 	const { store } = deps;
 	const startOfDay = () => {
 		const d = new Date();
