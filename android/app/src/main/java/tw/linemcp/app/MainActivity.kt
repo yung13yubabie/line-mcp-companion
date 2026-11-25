@@ -79,8 +79,8 @@ class MainActivity : FragmentActivity() {
 
 object Prefs {
     private fun p(ctx: Context) = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
-    fun disclaimerAccepted(ctx: Context) = p(ctx).getBoolean("disclaimer_v1", false)
-    fun setDisclaimerAccepted(ctx: Context) { p(ctx).edit().putBoolean("disclaimer_v1", true).commit() }
+    fun disclaimerAccepted(ctx: Context) = p(ctx).getBoolean("disclaimer_v2", false)
+    fun setDisclaimerAccepted(ctx: Context) { p(ctx).edit().putBoolean("disclaimer_v2", true).commit() }
 }
 
 const val DISCLAIMER = """這個 App 用的是非官方的 LINE 通訊協定（LINEJS），不是 LINE 官方提供的功能。
@@ -88,7 +88,9 @@ const val DISCLAIMER = """這個 App 用的是非官方的 LINE 通訊協定（L
 • LINE 可能因此限制或停用你的帳號，風險請自己評估
 • 建議先用次要帳號或測試帳號試用
 • 本專案與 LY Corporation（LINE）沒有任何關係，也沒有獲得授權
-• 聊天資料只存在這支手機；AI 功能預設全部關閉，要你自己打開"""
+• 同步資料保存在這支手機；內建 AI 預設關閉
+• 開啟雲端模型或提供 MCP 連接器存取後，允許的內容會傳到對應服務；去識別化不能保證移除所有個資
+• 索引、附件與部分中繼資料存於 App 私有空間，並非整個資料庫及所有檔案都加密"""
 
 @Composable
 fun DisclaimerScreen(onAccept: () -> Unit) {
@@ -97,6 +99,7 @@ fun DisclaimerScreen(onAccept: () -> Unit) {
         Spacer(Modifier.height(24.dp))
         Text("開始前先看一下 🙏", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Text(DISCLAIMER.trimIndent(), lineHeight = 22.sp)
+        if (BuildConfig.BUILD_TYPE == "review") Text("這是修復驗證版，尚未通過正式發布驗收。請只使用測試帳號與非敏感資料。", color = Warn, lineHeight = 22.sp)
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { checked = !checked }) {
             Checkbox(checked, { checked = it }, colors = CheckboxDefaults.colors(checkedColor = LineGreen))
             Text("我了解帳號可能被限制的風險")
@@ -167,7 +170,7 @@ fun AppRoot(client: ControlClient) {
                 // H-1：連到的不是我們的 Node 服務（埠被其他 App 佔用）→ 不顯示任何它回的內容、不送任何請求內容
                 Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("⚠️ 本機服務身分驗證失敗", color = Danger, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text("連接埠 47824 上的服務不是這個 App 啟動的，可能有其他 App 正在冒充。已停止連線，你的 token、AI 金鑰和 LINE 登入都沒有送出。", fontSize = 14.sp)
+                    Text("連接埠 ${BuildConfig.CONTROL_PORT} 上的服務未通過身分或回應完整性驗證，連線已停止。請先檢查本機服務狀態，再重新操作。", fontSize = 14.sp)
                     Text("請移除最近安裝的可疑 App，然後重新開機或在系統設定裡強制停止本 App 再開啟。", fontSize = 14.sp)
                 }
                 return@Box

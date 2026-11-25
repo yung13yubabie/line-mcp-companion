@@ -281,12 +281,12 @@ export class AiPolicy {
 	// ---- 計數 -------------------------------------------------------------
 	sentSince(ts: number, chatId?: string): number {
 		const row = chatId
-			? (this.store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE status='sent' AND origin != 'scam_warn' AND sent_at >= ? AND chat_id = ?").get(ts, chatId) as { n: number })
-			: (this.store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE status='sent' AND origin != 'scam_warn' AND sent_at >= ?").get(ts) as { n: number });
+			? (this.store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE sent_at IS NOT NULL AND origin != 'scam_warn' AND sent_at >= ? AND chat_id = ?").get(ts, chatId) as { n: number })
+			: (this.store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE sent_at IS NOT NULL AND origin != 'scam_warn' AND sent_at >= ?").get(ts) as { n: number });
 		return Number(row.n);
 	}
 	lastSentAt(chatId: string): number | null {
-		const r = this.store.db.prepare("SELECT MAX(sent_at) AS t FROM outbox WHERE status='sent' AND origin != 'scam_warn' AND chat_id = ?").get(chatId) as { t: number | null };
+		const r = this.store.db.prepare("SELECT MAX(sent_at) AS t FROM outbox WHERE sent_at IS NOT NULL AND origin != 'scam_warn' AND chat_id = ?").get(chatId) as { t: number | null };
 		return r.t === null ? null : Number(r.t);
 	}
 	counters(): { sent_today: number; daily_cap: number } {

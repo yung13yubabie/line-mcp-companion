@@ -23,6 +23,7 @@ import { AiPolicy } from "../src/ai/policy.ts";
 import { Audit } from "../src/ai/audit.ts";
 import { Outbox } from "../src/ai/outbox.ts";
 import { AiService } from "../src/ai/service.ts";
+import { fakeTransport } from "./helpers/http-transport.ts";
 import { ScamDetector } from "../src/scam/detector.ts";
 import { ScamWarner } from "../src/scam/warner.ts";
 import type { MessageSender } from "../src/ai/sender.ts";
@@ -205,16 +206,29 @@ test("SR-12 upstream guard：reactToMessage / sendSquareThreadMessage 等無許�
 // SR-13：AI 圖片網址下載：不跟隨轉址、串流大小上限
 test("SR-13 generateImage 下載圖片：redirect 不跟隨、超過上限即中止", async () => {
 	const seen: { url: string; redirect?: string }[] = [];
-	const big = new Uint8Array(21 * 1024 * 1024);
+	const big = Buffer.alloc(21 * 1024 * 1024);
 	const fakeFetch = (async (u: string | URL, init?: RequestInit) => {
 		seen.push({ url: String(u), redirect: init?.redirect });
 		if (String(u).endsWith("/images/generations")) return new Response(JSON.stringify({ data: [{ url: "https://img.example/a.png" }] }), { status: 200 });
-		return new Response(new ReadableStream({ start(c) { c.enqueue(big); c.close(); } }), { status: 200 });
+		throw new Error("image downloads must use the pinned transport");
 	}) as typeof fetch;
-	const p = new OpenAICompatProvider({ provider: "custom", base_url: "https://api.example/v1", model: "m", image_model: "img" }, () => "sk-test-000000000000", { fetch: fakeFetch });
+	const image = fakeTransport(({ response }) => () => response.end(big));
+	const p = new OpenAICompatProvider({ provider: "custom", base_url: "https://api.example/v1", model: "m", image_model: "img" }, () => "sk-test-000000000000", {
+		fetch: fakeFetch, imageDownload: { resolve: async () => ["93.184.215.14"], request: image.request },
+	});
 	await assert.rejects(p.generateImage("cat"), /太大|too_large/);
-	const dl = seen.find((s) => s.url.startsWith("https://img.example"))!;
-	assert.notEqual(dl.redirect, "follow");
+	assert.equal(seen[0]!.redirect, "error");
+	assert.equal(image.seen.length, 1);
+	assert.equal(image.seen[0]!.destroyed, true);
+	const redirect = fakeTransport(({ response }) => {
+		response.statusCode = 302; response.headers.location = "https://127.0.0.1/internal";
+		return () => response.end();
+	});
+	const redirected = new OpenAICompatProvider({ provider: "custom", base_url: "https://api.example/v1", model: "m", image_model: "img" }, () => "sk-test-000000000000", {
+		fetch: fakeFetch, imageDownload: { resolve: async () => ["93.184.215.14"], request: redirect.request },
+	});
+	await assert.rejects(redirected.generateImage("cat"), /HTTP 302/);
+	assert.equal(redirect.seen.length, 1, "Location must not trigger a second request");
 });
 
 // SR-08：桌面模式自動產生的 token 不可印到 stdout/stderr（改寫入 0600 檔案）

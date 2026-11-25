@@ -8,6 +8,9 @@
  */
 import { redact } from "./audit.ts";
 import type { ChatMsg } from "./prompt.ts";
+import { downloadImage, type ImageDownloadOptions } from "./image-download.ts";
+import { decodeImageBase64 } from "../media/image-validation.ts";
+import { DownloadError } from "../net/bounded-request.ts";
 
 export type ProviderKind = "openai" | "xai" | "anthropic" | "custom" | "mock";
 
@@ -59,10 +62,17 @@ export const PRESETS: Record<Exclude<ProviderKind, "mock">, { base_url: string; 
 
 export interface AiProvider {
 	readonly kind: ProviderKind;
-	chat(messages: ChatMsg[], opts?: { maxTokens?: number }): Promise<string>;
-	generateImage(prompt: string): Promise<{ bytes: Uint8Array; mime: string }>;
+	chat(messages: ChatMsg[], opts?: AiChatOptions): Promise<string>;
+	generateImage(prompt: string, opts?: AiAuthorizationOptions): Promise<{ bytes: Uint8Array; mime: string }>;
 	detect(): Promise<AiCapabilities>;
 }
+
+export interface AiAuthorizationOptions {
+	/** Per-call authorization snapshot guard. Rechecked before each new request/retry and before returning data. */
+	assertAuthorized?: () => void;
+}
+
+export interface AiChatOptions extends AiAuthorizationOptions { maxTokens?: number; }
 
 export class AiError extends Error {
 	readonly code: string;
@@ -87,20 +97,30 @@ export function validateBaseUrl(u: string): URL {
 
 type FetchLike = typeof fetch;
 
+function checkAuthorization(check?: () => void): void {
+	try { check?.(); }
+	catch (error) {
+		// Arbitrary guard errors must never become a retryable network failure.
+		throw new AiError("authorization_revoked", error instanceof Error ? error.message : "AI authorization revoked");
+	}
+}
+
 export class OpenAICompatProvider implements AiProvider {
 	readonly kind: ProviderKind;
 	#cfg: AiConfig;
 	#key: () => string | undefined;
 	#fetch: FetchLike;
 	#timeoutMs: number;
+	#imageDownload: ImageDownloadOptions;
 
-	constructor(cfg: AiConfig, getKey: () => string | undefined, opts: { fetch?: FetchLike; timeoutMs?: number } = {}) {
+	constructor(cfg: AiConfig, getKey: () => string | undefined, opts: { fetch?: FetchLike; timeoutMs?: number; imageDownload?: ImageDownloadOptions } = {}) {
 		validateBaseUrl(cfg.base_url);
 		this.kind = cfg.provider;
 		this.#cfg = cfg;
 		this.#key = getKey;
 		this.#fetch = opts.fetch ?? fetch;
 		this.#timeoutMs = opts.timeoutMs ?? 45_000;
+		this.#imageDownload = opts.imageDownload ?? {};
 	}
 
 	#headers(): Record<string, string> {
@@ -116,9 +136,10 @@ export class OpenAICompatProvider implements AiProvider {
 		return h;
 	}
 
-	async #call(method: "GET" | "POST", path: string, body?: unknown, maxBytes = 2 * 1024 * 1024): Promise<Record<string, unknown>> {
+	async #call(method: "GET" | "POST", path: string, body?: unknown, maxBytes = 2 * 1024 * 1024, assertAuthorized?: () => void): Promise<Record<string, unknown>> {
 		const url = this.#cfg.base_url.replace(/\/+$/, "") + path;
 		let res: Response;
+		checkAuthorization(assertAuthorized);
 		try {
 			res = await this.#fetch(url, {
 				method,
@@ -128,10 +149,14 @@ export class OpenAICompatProvider implements AiProvider {
 				redirect: "error",
 			});
 		} catch (e) {
+			checkAuthorization(assertAuthorized);
 			if (e instanceof AiError) throw e;
 			throw new AiError("network", `連線失敗：${this.#clean((e as Error).message)}`);
 		}
+		try { checkAuthorization(assertAuthorized); }
+		catch (error) { void res.body?.cancel().catch(() => {}); throw error; }
 		const text = await readLimited(res, maxBytes);
+		checkAuthorization(assertAuthorized);
 		if (!res.ok) {
 			const code = res.status === 401 || res.status === 403 ? "auth" : res.status === 429 ? "rate_limited" : res.status === 404 ? "not_found" : "http_error";
 			let msg = text.slice(0, 300);
@@ -155,17 +180,17 @@ export class OpenAICompatProvider implements AiProvider {
 		return redact(key ? s.split(key).join("[redacted]") : s, 300);
 	}
 
-	async chat(messages: ChatMsg[], opts: { maxTokens?: number } = {}): Promise<string> {
+	async chat(messages: ChatMsg[], opts: AiChatOptions = {}): Promise<string> {
 		if (!this.#cfg.model) throw new AiError("no_model", "尚未設定模型");
 		const field = this.#cfg.max_tokens_field ?? defaultTokensField(this.#cfg);
 		const body = (f: MaxTokensField) => ({ model: this.#cfg.model, messages, [f]: opts.maxTokens ?? 300, ...(f === "max_tokens" ? { temperature: 0.6 } : {}) });
 		let j: Record<string, unknown>;
 		try {
-			j = await this.#call("POST", "/chat/completions", body(field));
+			j = await this.#call("POST", "/chat/completions", body(field), undefined, opts.assertAuthorized);
 		} catch (e) {
 			// 有的服務只收另一個欄位名（anti-scam-helper 的 maxTokensField 經驗）：HTTP 400 且提到該參數 → 換欄位重試一次
 			if (!(e instanceof AiError) || e.code !== "http_error" || !/HTTP 400/.test(e.message) || !/max_(completion_)?tokens|unsupported|temperature/i.test(e.message)) throw e;
-			j = await this.#call("POST", "/chat/completions", body(field === "max_tokens" ? "max_completion_tokens" : "max_tokens"));
+			j = await this.#call("POST", "/chat/completions", body(field === "max_tokens" ? "max_completion_tokens" : "max_tokens"), undefined, opts.assertAuthorized);
 		}
 		const choices = j.choices as { message?: { content?: unknown } }[] | undefined;
 		const c = choices?.[0]?.message?.content;
@@ -174,21 +199,26 @@ export class OpenAICompatProvider implements AiProvider {
 		return text;
 	}
 
-	async generateImage(prompt: string): Promise<{ bytes: Uint8Array; mime: string }> {
+	async generateImage(prompt: string, opts: AiAuthorizationOptions = {}): Promise<{ bytes: Uint8Array; mime: string }> {
 		if (!this.#cfg.image_model) throw new AiError("no_image_model", "此供應商未設定圖片模型");
 		const body: Record<string, unknown> = { model: this.#cfg.image_model, prompt, n: 1 };
 		if (!/gpt-image/.test(this.#cfg.image_model)) body.response_format = "b64_json";
-		const j = await this.#call("POST", "/images/generations", body, 30 * 1024 * 1024);
-		const d = (j.data as { b64_json?: string; url?: string }[] | undefined)?.[0];
-		if (d?.b64_json) return { bytes: new Uint8Array(Buffer.from(d.b64_json, "base64")), mime: sniffMime(Buffer.from(d.b64_json.slice(0, 32), "base64")) };
-		if (d?.url) {
-			const u = new URL(d.url);
-			if (u.protocol !== "https:") throw new AiError("bad_response", "圖片網址不是 https");
-			// 不跟隨轉址（避免被導向 http / 內網位址），串流讀取並在超過上限時立即中止
-			const r = await this.#fetch(u, { signal: AbortSignal.timeout(this.#timeoutMs), redirect: "error" });
-			if (!r.ok) throw new AiError("http_error", `下載圖片失敗 HTTP ${r.status}`);
-			const buf = await readLimitedBytes(r, 20 * 1024 * 1024);
-			return { bytes: buf, mime: sniffMime(buf) };
+		const j = await this.#call("POST", "/images/generations", body, 30 * 1024 * 1024, opts.assertAuthorized);
+		const d: unknown = Array.isArray(j.data) ? j.data[0] : undefined;
+		if (d && typeof d === "object") {
+			try {
+				checkAuthorization(opts.assertAuthorized);
+				if ("b64_json" in d && d.b64_json !== undefined && d.b64_json !== null && d.b64_json !== "") return decodeImageBase64(d.b64_json);
+				if ("url" in d && typeof d.url === "string") {
+					// A provider response is untrusted. Its URL uses a separate, pinned
+					// transport and never receives the API key or the API fetch client.
+					return await downloadImage(d.url, { ...this.#imageDownload, timeoutMs: this.#timeoutMs, assertAuthorized: () => checkAuthorization(opts.assertAuthorized) });
+				}
+			} catch (error) {
+				if (error instanceof AiError) throw error;
+				if (error instanceof DownloadError) throw new AiError(error.code, error.message);
+				throw new AiError("bad_image", "圖片下載或驗證失敗");
+			}
 		}
 		throw new AiError("bad_response", "沒有圖片資料");
 	}
@@ -215,24 +245,33 @@ export class FallbackChain implements AiProvider {
 		this.#list = list;
 		this.kind = list[0]!.p.kind;
 	}
-	async chat(messages: ChatMsg[], opts?: { maxTokens?: number }): Promise<string> {
+	async chat(messages: ChatMsg[], opts: AiChatOptions = {}): Promise<string> {
 		let last: unknown;
+		const guardedOpts = { ...opts, assertAuthorized: opts.assertAuthorized ? () => checkAuthorization(opts.assertAuthorized) : undefined };
 		for (const { name, p } of this.#list) {
+			checkAuthorization(opts.assertAuthorized);
+			let result: string;
 			try {
-				const r = await p.chat(messages, opts);
-				this.used.push(name);
-				if (this.used.length > 20) this.used.shift();
-				return r;
+				result = await p.chat(messages, guardedOpts);
 			} catch (e) {
+				checkAuthorization(opts.assertAuthorized);
 				last = e;
 				const code = e instanceof AiError ? e.code : "network";
 				if (!["network", "auth", "rate_limited", "http_error", "bad_response", "no_api_key", "not_found", "too_large"].includes(code)) throw e;
+				continue;
 			}
+			checkAuthorization(opts.assertAuthorized);
+			this.used.push(name);
+			if (this.used.length > 20) this.used.shift();
+			return result;
 		}
 		throw last;
 	}
-	generateImage(prompt: string) {
-		return this.#list[0]!.p.generateImage(prompt);
+	async generateImage(prompt: string, opts: AiAuthorizationOptions = {}) {
+		checkAuthorization(opts.assertAuthorized);
+		const image = await this.#list[0]!.p.generateImage(prompt, opts);
+		checkAuthorization(opts.assertAuthorized);
+		return image;
 	}
 	detect() {
 		return this.#list[0]!.p.detect();
@@ -246,26 +285,6 @@ export function capabilitiesFromModels(kind: ProviderKind, models: string[], cfg
 	const vision = kind === "anthropic" ? text : any(/gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision|grok-(2-vision|4|vision)|llava|claude|gemini|qwen.*vl/i);
 	const voice = any(/tts|whisper|transcribe|audio|realtime|voice/i);
 	return { text, vision, image_gen, voice };
-}
-
-async function readLimitedBytes(res: Response, max: number): Promise<Uint8Array> {
-	const len = Number(res.headers.get("content-length") ?? 0);
-	if (len > max) throw new AiError("too_large", "圖片太大");
-	if (!res.body) return new Uint8Array(0);
-	const reader = res.body.getReader();
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		total += value.byteLength;
-		if (total > max) {
-			await reader.cancel();
-			throw new AiError("too_large", "圖片太大");
-		}
-		chunks.push(value);
-	}
-	return new Uint8Array(Buffer.concat(chunks));
 }
 
 async function readLimited(res: Response, max: number): Promise<string> {

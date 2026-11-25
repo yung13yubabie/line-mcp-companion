@@ -90,7 +90,7 @@ fun SettingsScreen(client: ControlClient) {
     LaunchedEffect(Unit) { var last = ""; while (true) { val i = runCatching { client.info() }.getOrNull(); val s = i?.toString() ?: ""; if (s != last) { last = s; info = i }; delay(4000) } }
     // 顯示 30 秒後自動遮起來
     LaunchedEffect(revealed) { if (revealed) { delay(30_000); revealed = false } }
-    val url = info?.optString("mcp_url") ?: "http://127.0.0.1:47823/mcp"
+    val url = info?.optString("mcp_url") ?: "http://127.0.0.1:${BuildConfig.MCP_PORT}/mcp"
     fun restartNode() = ctx.startService(Intent(ctx, NodeService::class.java).setAction(NodeService.ACTION_RESTART))
     fun withAuth(reason: String, f: () -> Unit) = authenticate(activity, reason, f) { msg = it }
     val t = token ?: ""
@@ -116,9 +116,10 @@ fun SettingsScreen(client: ControlClient) {
         }
         ConnectorSection(client) { reason, f -> withAuth(reason, f) }
         Section("狀態") {
-            if (info?.optString("mcp_error") == "port_in_use") Text("⚠️ MCP 連接埠 47823 被其他 App 佔用：AI 用戶端可能連到冒牌服務，請先移除可疑 App 再重新啟動", color = Warn, fontSize = 13.sp)
+            if (info?.optString("mcp_error") == "port_in_use") Text("⚠️ MCP 連接埠 ${BuildConfig.MCP_PORT} 被其他 App 佔用：AI 用戶端可能連到冒牌服務，請先移除可疑 App 再重新啟動", color = Warn, fontSize = 13.sp)
             Text("已讀回條：${if (info?.optString("read_receipts") == "blocked") "封鎖中" else info?.optString("read_receipts") ?: "-"}")
-            Text("資料加密：${when (info?.optString("data_key")) { "keystore" -> "Android Keystore"; "ephemeral" -> "Mock（臨時金鑰）"; null, "" -> "-"; else -> info?.optString("data_key") }}")
+            Text("敏感欄位金鑰：${when (info?.optString("data_key")) { "keystore" -> "Android Keystore"; "ephemeral" -> "Mock（臨時金鑰）"; null, "" -> "-"; else -> info?.optString("data_key") }}")
+            Text("部分資料庫欄位加密；聊天索引、附件與部分中繼資料另存於 App 私有空間。", fontSize = 12.sp, color = Color.Gray)
             Text("會話 / 開放 / 訊息：${info?.optJSONObject("counts")?.let { "${it.optInt("chats")} / ${it.optInt("allowed")} / ${it.optInt("messages")}" } ?: "-"}")
             Text("執行模式：${if (info?.optBoolean("mock") == true) "Mock（假資料）" else "正式"}")
         }
@@ -134,7 +135,8 @@ fun SettingsScreen(client: ControlClient) {
         }
         Section("關於") {
             TextButton(onClick = { showDisclaimer = true }) { Text("風險說明（非官方協定）") }
-            Text("版本 ${BuildConfig.VERSION_NAME}（${if (BuildConfig.DEBUG) "debug" else "release"}）· 與 LY Corporation 無關", fontSize = 12.sp, color = Color.Gray)
+            Text("版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.BUILD_TYPE}）· 與 LY Corporation 無關", fontSize = 12.sp, color = Color.Gray)
+            if (BuildConfig.BUILD_TYPE == "review") Text("獨立審查版：使用測試簽章與分開的本機資料，供驗證修復使用。", fontSize = 12.sp, color = Warn)
         }
         if (BuildConfig.DEBUG) {
             Section("開發者（只在 debug 版）") {

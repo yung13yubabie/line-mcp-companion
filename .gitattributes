@@ -1,0 +1,4 @@
+# Preserve the exact, checksum-verified upstream notice and signature bytes.
+scripts/node-android/provenance/ndk-r30-NOTICE.toolchain.txt -text -whitespace
+scripts/node-android/provenance/icu-79.1-LICENSE.txt -text
+scripts/node-android/provenance/termux-InRelease -text

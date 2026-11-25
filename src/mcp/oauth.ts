@@ -240,7 +240,8 @@ export class OAuthServer {
 		}
 		if (!this.#checkPairing(form.get("pairing_code") ?? "")) throw new OAuthError("access_denied", "配對碼錯誤或已過期（在 App 設定 → 雲端連接器 看最新配對碼）", 403);
 		this.#pending.delete(nonce);
-		const scope = form.get("allow_send") === "on" ? ["line.read", "line.send"] : ["line.read"];
+		// A modified form must not grant a scope absent from the bound authorization request.
+		const scope = form.get("allow_send") === "on" && p.scope.includes("line.send") ? ["line.read", "line.send"] : ["line.read"];
 		const code = rand(32);
 		this.#store.db
 			.prepare("INSERT INTO oauth_code(code_hash, client_id, redirect_uri, challenge, scope, resource, expires_at) VALUES (?,?,?,?,?,?,?)")

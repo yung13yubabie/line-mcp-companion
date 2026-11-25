@@ -9,6 +9,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Mac
@@ -17,7 +18,7 @@ import javax.crypto.spec.SecretKeySpec
 class ControlError(val status: Int, val code: String, message: String) : Exception(message)
 
 /** 呼叫 Node 端控制 API（src/control/server.ts）。全部在 Dispatchers.IO。 */
-class ControlClient(private val token: String, private val base: String = "http://127.0.0.1:47824/control") {
+class ControlClient(private val token: String, private val base: String = "http://127.0.0.1:${BuildConfig.CONTROL_PORT}/control") {
     // secreview SR-01 / H-1：其他 App 可以搶先佔用 127.0.0.1:47824。先用 /hello 挑戰確認伺服器持有 token，
     // 請求本身也不帶 token（見 raw()）。
     private fun hmacHex(msg: String): String {
@@ -32,6 +33,7 @@ class ControlClient(private val token: String, private val base: String = "http:
     private fun verifyServer() {
         val n = nonce()
         val c = URL("$base/hello").openConnection() as HttpURLConnection
+        c.instanceFollowRedirects = false
         c.connectTimeout = 3000; c.readTimeout = 3000
         c.setRequestProperty("x-lma-nonce", n)
         val ok = runCatching { c.responseCode == 200 && same(c.getHeaderField("x-lma-proof"), hmacHex("hello:$n")) }.getOrDefault(false)
@@ -70,6 +72,7 @@ class ControlClient(private val token: String, private val base: String = "http:
         val ts = System.currentTimeMillis()
         val sig = hmacHex("req:$n:$ts:$method:$fullPath:${sha256Hex(payload)}")
         val c = u.openConnection() as HttpURLConnection
+        c.instanceFollowRedirects = false
         c.requestMethod = method
         c.setRequestProperty("x-lma-nonce", n)
         c.setRequestProperty("x-lma-auth", "v1 $ts.$sig")
@@ -81,13 +84,31 @@ class ControlClient(private val token: String, private val base: String = "http:
             c.setRequestProperty("x-lma-enc", "1")
             c.outputStream.use { it.write(payload) }
         }
-        val code = c.responseCode
-        val bytes = (if (code < 400) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
-        val bodyPart = if (c.getHeaderField("x-lma-proof-body") == "1") sha256Hex(bytes) else "-"
-        val ok = same(c.getHeaderField("x-lma-proof"), hmacHex("resp:$n:$method:$fullPath:$code:$bodyPart"))
-        c.disconnect()
-        if (!ok) { verifiedAt = 0; throw ControlError(0, "server_untrusted", "本機服務回應未通過驗證，已丟棄（可能有其他 App 佔用連接埠）") }
-        code to bytes
+        try {
+            val code = c.responseCode
+            // JSON、CSV、圖片都必須驗 body；不接受舊版的「只簽 header」降級。
+            if (c.getHeaderField("x-lma-proof-body") != "1") {
+                verifiedAt = 0
+                throw ControlError(0, "server_untrusted", "本機服務回應缺少完整內容驗證，已停止連線")
+            }
+            if (c.contentLengthLong > MAX_RESPONSE_BYTES) throw ControlError(0, "response_too_large", "本機服務回應超過大小限制")
+            val bytes = (if (code < 400) c.inputStream else c.errorStream)?.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (output.size().toLong() + count > MAX_RESPONSE_BYTES) throw ControlError(0, "response_too_large", "本機服務回應超過大小限制")
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            } ?: ByteArray(0)
+            val ok = same(c.getHeaderField("x-lma-proof"), hmacHex("resp:$n:$method:$fullPath:$code:${sha256Hex(bytes)}"))
+            if (!ok) { verifiedAt = 0; throw ControlError(0, "server_untrusted", "本機服務回應未通過驗證，已丟棄（可能有其他 App 佔用連接埠）") }
+            code to bytes
+        } finally {
+            c.disconnect()
+        }
     }
 
     private suspend fun call(method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 5000): String {
@@ -117,11 +138,16 @@ class ControlClient(private val token: String, private val base: String = "http:
     }
 
     suspend fun state() = getObj("/state")
+    /** Keepalive must prove server identity and authenticate the response, not merely receive HTTP. */
+    suspend fun health(): Boolean = getObj("/health").optBoolean("ok", false)
     suspend fun startQrLogin() = postObj("/login/qr")
     suspend fun chats() = getArr("/chats")
     suspend fun info() = getObj("/info")
     suspend fun messages(chatId: String, around: String? = null) = getArr("/messages?chat_id=" + enc(chatId) + "&limit=100" + (around?.let { "&around=" + enc(it) } ?: ""))
     suspend fun setAllowed(chatId: String, allowed: Boolean) = post("/chats/allow", JSONObject().put("chat_id", chatId).put("allowed", allowed))
 
-    companion object { fun enc(s: String): String = URLEncoder.encode(s, "UTF-8") }
+    companion object {
+        private const val MAX_RESPONSE_BYTES = 24 * 1024 * 1024
+        fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
+    }
 }

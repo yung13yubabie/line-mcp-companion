@@ -14,6 +14,7 @@ export interface AuditEntry {
 	chat_id: string | null;
 	ok: number;
 	detail: string | null;
+	stream?: "activity" | "security";
 }
 
 const SECRET_RE = /(sk-[A-Za-z0-9_\-]{8,}|xai-[A-Za-z0-9_\-]{8,}|Bearer\s+[A-Za-z0-9._\-]{8,}|[a-f0-9]{40,})/g;
@@ -30,6 +31,20 @@ export class Audit {
 	constructor(store: Store, keep = 5000) {
 		this.#store = store;
 		this.#keep = keep;
+		// Unauthenticated traffic must never evict permission changes or send history.
+		store.db.exec("CREATE TABLE IF NOT EXISTS security_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, chat_id TEXT, ok INTEGER NOT NULL DEFAULT 0, detail TEXT)");
+	}
+
+	/** Aggregated authentication events have a separate, bounded 500-row retention ring. */
+	logSecurity(actor: Actor, action: string, detail: Record<string, unknown>): void {
+		const r = this.#store.db.prepare("INSERT INTO security_log(ts, actor, action, ok, detail) VALUES (?, ?, ?, 0, ?)")
+			.run(Date.now(), actor, action, redact(JSON.stringify(detail), 400));
+		this.#store.db.prepare("DELETE FROM security_log WHERE id <= ?").run(Number(r.lastInsertRowid) - 500);
+	}
+
+	securityRecent(limit = 50): AuditEntry[] {
+		return this.#store.db.prepare("SELECT *, 'security' AS stream FROM security_log ORDER BY id DESC LIMIT ?")
+			.all(Math.max(1, Math.min(500, limit))) as unknown as AuditEntry[];
 	}
 
 	log(actor: Actor, action: string, opts: { chatId?: string | null; ok?: boolean; detail?: Record<string, unknown> | string } = {}): void {
@@ -45,7 +60,7 @@ export class Audit {
 		if (id % 200 === 0) this.#store.db.prepare("DELETE FROM audit_log WHERE id <= ?").run(id - this.#keep);
 	}
 
-	recent(opts: { limit?: number; actor?: Actor; sinceTs?: number } = {}): AuditEntry[] {
+	recent(opts: { limit?: number; actor?: Actor; sinceTs?: number; includeSecurity?: boolean } = {}): AuditEntry[] {
 		const lim = Math.max(1, Math.min(500, opts.limit ?? 50));
 		const where: string[] = [];
 		const args: (string | number)[] = [];
@@ -58,6 +73,9 @@ export class Audit {
 			args.push(opts.sinceTs);
 		}
 		const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
-		return this.#store.db.prepare(`SELECT * FROM audit_log ${w} ORDER BY id DESC LIMIT ?`).all(...args, lim) as unknown as AuditEntry[];
+		const source = opts.includeSecurity
+			? "(SELECT *, 'activity' AS stream FROM audit_log UNION ALL SELECT *, 'security' AS stream FROM security_log)"
+			: "audit_log";
+		return this.#store.db.prepare(`SELECT * FROM ${source} ${w} ORDER BY ${opts.includeSecurity ? "ts DESC, " : ""}id DESC LIMIT ?`).all(...args, lim) as unknown as AuditEntry[];
 	}
 }

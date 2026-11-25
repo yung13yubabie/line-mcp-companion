@@ -46,6 +46,9 @@ export const MAX_PENDING_PER_CHAT = 10;
 export const PENDING_TTL_MS = 24 * 3_600_000;
 export const MAX_TEXT = 2000;
 
+/** A permission/state change stops the remaining parts without retrying them. */
+class DispatchStopped extends Error {}
+
 export interface EnqueueInput {
 	chatId: string;
 	kind: SendKind;
@@ -76,6 +79,7 @@ export class Outbox {
 	/** 加密紀錄（AI 代聊紀錄 / 反詐紀錄）；未設定 = 不記 */
 	log: EventLog | null = null;
 	#busy = false;
+	#dispatching = new Set<number>();
 
 	/** 佇列項目生命週期 → AI 代聊紀錄；反詐提醒 → 更新反詐紀錄的動作 */
 	#event(it: OutboxItem, event: AiEvent, actor: string, opts: { text?: string | null; detail?: string | null; first?: boolean } = {}): void {
@@ -203,6 +207,7 @@ export class Outbox {
 
 	/** 使用者核准（可編輯）。重新檢查（approvedByUser=true：略過時段/間隔/每小時，但不略過 kill switch、白名單、每日上限）。 */
 	approve(id: number, editedText?: string | null, actor: Actor = "ui"): OutboxItem {
+		if (this.#dispatching.has(id)) throw new Error("send_in_progress: wait for the current send to finish");
 		const it = this.get(id);
 		if (!it) throw new Error("outbox item not found");
 		if (it.status !== "pending") throw new Error(`cannot approve item in status ${it.status}`);
@@ -235,6 +240,7 @@ export class Outbox {
 	 * （禁字替換、不可含連結、不可引用詐騙內容）。@ 標記依原字串重新定位，找不到就拿掉。
 	 */
 	edit(id: number, patch: { text?: string | null; sticker?: StickerRef | null }, actor: Actor = "ui"): OutboxItem {
+		if (this.#dispatching.has(id)) throw new Error("send_in_progress: wait for the current send to finish");
 		const it = this.get(id);
 		if (!it) throw new Error("outbox item not found");
 		if (it.status !== "pending") throw new Error(`cannot edit item in status ${it.status}`);
@@ -356,7 +362,48 @@ export class Outbox {
 		);
 	}
 
-	/** 送出所有到期的 approved。回傳送出筆數。 */
+	/** 每次實際 sender 呼叫前重新讀取狀態與完整權限；不得跨 await 沿用先前的許可。 */
+	#prepareDispatch(id: number, checkUserReply = true): OutboxItem | undefined {
+		const it = this.get(id);
+		if (!it || it.status !== "approved" || it.scheduled_at === null || it.scheduled_at > this.policy.clock.now()) return;
+		const byUser = it.decided_at !== null;
+		const requiresReview = it.origin === "scam_warn"
+			? this.policy.trust(it.chat_id, "scam") !== "auto"
+			: this.policy.needsConfirmation(this.policy.get(it.chat_id), it.flags ? it.flags.split(",") : []);
+		if (!byUser && requiresReview) {
+			this.store.db.prepare("UPDATE outbox SET status='pending', scheduled_at=NULL, error='confirmation_required' WHERE id=? AND status='approved'").run(it.id);
+			this.audit.log("system", "send_returned_to_review", { chatId: it.chat_id, detail: { id: it.id } });
+			return;
+		}
+		if ((it.reply_to && this.store.isHidden(it.chat_id, it.reply_to)) || (it.trigger_id && this.store.isHidden(it.chat_id, it.trigger_id))) {
+			this.#cancelHidden(it);
+			return;
+		}
+		if (it.origin === "scam_warn") {
+			const why = this.policy.killSwitch ? "kill_switch" : this.store.getChat(it.chat_id)?.allowed !== 1 ? "chat_not_allowed" : this.warnCheck(it);
+			if (why) {
+				this.store.db.prepare("UPDATE outbox SET status='rejected', error=? WHERE id=?").run(why, it.id);
+				this.audit.log("system", "scam_warning_blocked", { chatId: it.chat_id, ok: false, detail: { id: it.id, reason: why } });
+				this.#event(it, "blocked", "system", { detail: why });
+				return;
+			}
+		}
+		const chk = it.origin === "scam_warn" ? ({ ok: true } as const) : this.policy.checkSend(it.chat_id, it.kind, { approvedByUser: byUser });
+		if (!chk.ok) {
+			this.#bounce(it, chk.reason);
+			return;
+		}
+		// 自動回覆：使用者已在手機上親自回覆 → 取消尚未開始的發送。
+		if (checkUserReply && !byUser && it.origin === "auto" && this.#userRepliedSince(it.chat_id, it.created_at)) {
+			this.store.db.prepare("UPDATE outbox SET status='expired', error='superseded_by_user' WHERE id=?").run(it.id);
+			this.#event(it, "expired", "system", { detail: "superseded_by_user" });
+			this.audit.log("auto", "cancelled_user_replied", { chatId: it.chat_id, detail: { id: it.id } });
+			return;
+		}
+		return it;
+	}
+
+	/** 送出所有到期的 approved。回傳完整送出的筆數；部分送出不自動重排。 */
 	async processDue(): Promise<number> {
 		if (this.#busy) return 0;
 		this.#busy = true;
@@ -364,60 +411,64 @@ export class Outbox {
 		try {
 			const now = this.policy.clock.now();
 			const due = this.store.db.prepare("SELECT * FROM outbox WHERE status='approved' AND scheduled_at <= ? ORDER BY scheduled_at, id").all(now) as unknown as OutboxItem[];
-			for (const it of due) {
+			for (const snapshot of due) {
+				// 前一筆送出會 await；這段期間使用者可能取消或退回後面的項目。
+				const it = this.#prepareDispatch(snapshot.id);
+				if (!it) continue;
 				const byUser = it.decided_at !== null;
-				if ((it.reply_to && this.store.isHidden(it.chat_id, it.reply_to)) || (it.trigger_id && this.store.isHidden(it.chat_id, it.trigger_id))) {
-					this.#cancelHidden(it);
-					continue;
-				}
-				if (it.origin === "scam_warn") {
-					const why = this.policy.killSwitch ? "kill_switch" : this.store.getChat(it.chat_id)?.allowed !== 1 ? "chat_not_allowed" : this.warnCheck(it);
-					if (why) {
-						this.store.db.prepare("UPDATE outbox SET status='rejected', error=? WHERE id=?").run(why, it.id);
-						this.audit.log("system", "scam_warning_blocked", { chatId: it.chat_id, ok: false, detail: { id: it.id, reason: why } });
-						this.#event(it, "blocked", "system", { detail: why });
-						continue;
+				let attempted = 0;
+				let completed = 0;
+				let lastConfirmedAt: number | null = null;
+				const planned = it.kind !== "text" && it.text ? 2 : 1;
+				const requireCurrentPermission = () => {
+					// 發送開始後，LINE 的自身回聲不能當作新的手動回覆。
+					if (!this.#prepareDispatch(it.id, attempted === 0)) {
+						const current = this.get(it.id);
+						throw new DispatchStopped(current?.error ?? `state_${current?.status ?? "missing"}`);
 					}
-				}
-				const chk = it.origin === "scam_warn" ? ({ ok: true } as const) : this.policy.checkSend(it.chat_id, it.kind, { approvedByUser: byUser });
-				if (!chk.ok) {
-					this.#bounce(it, chk.reason);
-					continue;
-				}
-				// 自動回覆：使用者已在手機上親自回覆（觸發訊息之後有自己的訊息）→ 取消
-				if (!byUser && it.origin === "auto" && this.#userRepliedSince(it.chat_id, it.created_at)) {
-					this.store.db.prepare("UPDATE outbox SET status='expired', error='superseded_by_user' WHERE id=?").run(it.id);
-					this.#event(it, "expired", "system", { detail: "superseded_by_user" });
-					this.audit.log("auto", "cancelled_user_replied", { chatId: it.chat_id, detail: { id: it.id } });
-					continue;
-				}
+				};
+				const send = async (operation: () => Promise<void>) => {
+					requireCurrentPermission();
+					attempted++;
+					await operation();
+					completed++;
+					lastConfirmedAt = this.policy.clock.now();
+				};
+				this.#dispatching.add(it.id);
 				try {
 					const opts = { replyTo: it.reply_to };
 					const mentions = it.mentions_json ? (JSON.parse(it.mentions_json) as { start: number; end: number; mid: string }[]) : [];
 					if (it.kind === "text" && mentions.length) {
 						try {
-							await this.sender.sendText(it.chat_id, it.text!, { ...opts, mentions });
+							await send(() => this.sender.sendText(it.chat_id, it.text!, { ...opts, mentions }));
 						} catch (e) {
+							if (e instanceof DispatchStopped) throw e;
 							// @ 失敗（LINE 只准 @ 最近發過言的人）→ 拿掉 @ 段落重送一次
 							this.audit.log("system", "mention_failed_retry", { chatId: it.chat_id, ok: false, detail: { id: it.id, error: redact((e as Error).message, 120) } });
-							await this.sender.sendText(it.chat_id, stripMentions(it.text!, mentions), opts);
+							await send(() => this.sender.sendText(it.chat_id, stripMentions(it.text!, mentions), opts));
 						}
-					} else if (it.kind === "text") await this.sender.sendText(it.chat_id, it.text!, opts);
+					} else if (it.kind === "text") await send(() => this.sender.sendText(it.chat_id, it.text!, opts));
 					else if (it.kind === "sticker") {
 						const st = JSON.parse(it.sticker_json!) as StickerRef;
+						const sticker = (withReply: boolean) => {
+							if (!this.stickerSendable(st)) throw new Error("sticker_not_owned");
+							return this.sender.sendSticker(it.chat_id, st, withReply ? opts : undefined);
+						};
 						if (!this.stickerSendable(st)) throw new Error("sticker_not_owned");
 						// 文字（若有）先送並帶引用，貼圖接在後面
 						if (it.text) {
-							await this.sender.sendText(it.chat_id, it.text, opts);
-							await this.sender.sendSticker(it.chat_id, st);
-						} else await this.sender.sendSticker(it.chat_id, st, opts);
+							await send(() => this.sender.sendText(it.chat_id, it.text!, opts));
+							await send(() => sticker(false));
+						} else await send(() => sticker(true));
 					} else {
 						const bytes = new Uint8Array(readFileSync(it.image_path!));
 						const mime = sniffMime(bytes);
-						await this.sender.sendImage(it.chat_id, bytes, mime, `ai-${it.id}.${mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png"}`);
-						if (it.text) await this.sender.sendText(it.chat_id, it.text, opts);
+						await send(() => this.sender.sendImage(it.chat_id, bytes, mime, `ai-${it.id}.${mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : "png"}`));
+						if (it.text) await send(() => this.sender.sendText(it.chat_id, it.text!, opts));
 					}
-					this.store.db.prepare("UPDATE outbox SET status='sent', sent_at=?, error=NULL WHERE id=?").run(this.policy.clock.now(), it.id);
+					// 末段在途期間的取消仍要保留；不能把 rejected/pending 覆蓋成 sent。
+					requireCurrentPermission();
+					this.store.db.prepare("UPDATE outbox SET status='sent', sent_at=?, error=NULL WHERE id=? AND status='approved'").run(lastConfirmedAt, it.id);
 					this.#event(it, "sent", "system", { text: it.text });
 					this.audit.log(it.origin === "mcp" ? "mcp" : it.origin === "ui" ? "ui" : it.origin === "scam_warn" ? "system" : "auto", it.origin === "scam_warn" ? "scam_warning_sent" : "sent", {
 						chatId: it.chat_id,
@@ -425,10 +476,18 @@ export class Outbox {
 					});
 					sent++;
 				} catch (e) {
-					const msg = redact((e as Error).message, 200);
-					this.store.db.prepare("UPDATE outbox SET status='failed', error=? WHERE id=?").run(msg, it.id);
-					this.#event(it, "failed", "system", { detail: msg });
-					this.audit.log("system", "send_failed", { chatId: it.chat_id, ok: false, detail: { id: it.id, error: msg } });
+					if (e instanceof DispatchStopped && attempted === 0) continue;
+					const prefix = completed === planned ? "delivered_after_revocation" : completed > 0 ? "partial_send" : "send_interrupted";
+					const msg = redact(`${prefix}: ${(e as Error).message}`, 200);
+					// 已嘗試或部分送出後不能退回 pending，否則重新核准會重送已發出的部分。
+					// sent_at 記錄至少一段成功；明示取消/隱藏的狀態保持不變。
+					this.store.db.prepare("UPDATE outbox SET status=CASE WHEN status IN ('rejected','expired') THEN status ELSE 'failed' END, sent_at=COALESCE(sent_at,?), scheduled_at=NULL, error=? WHERE id=?").run(lastConfirmedAt, msg, it.id);
+					const final = this.get(it.id);
+					if (final?.status !== "rejected" && final?.status !== "expired") this.#event(it, "failed", "system", { detail: msg });
+					this.audit.log("system", completed > 0 ? "send_interrupted_after_delivery" : "send_failed", { chatId: it.chat_id, ok: false, detail: { id: it.id, error: msg, completed_parts: completed, attempted_parts: attempted } });
+					if (completed === planned) sent++;
+				} finally {
+					this.#dispatching.delete(it.id);
 				}
 			}
 		} finally {
@@ -440,7 +499,7 @@ export class Outbox {
 	#userRepliedSince(chatId: string, ts: number): boolean {
 		const r = this.store.db.prepare("SELECT COUNT(*) AS n FROM message WHERE chat_id=? AND from_self=1 AND sent_at > ?").get(chatId, ts) as { n: number };
 		// 排除我們自己送出的（sent_at 在 outbox 有紀錄的不算「使用者親自回覆」）
-		const ours = this.store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE chat_id=? AND status='sent' AND sent_at > ?").get(chatId, ts) as { n: number };
+		const ours = this.store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE chat_id=? AND sent_at IS NOT NULL AND sent_at > ?").get(chatId, ts) as { n: number };
 		return Number(r.n) > Number(ours.n);
 	}
 

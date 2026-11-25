@@ -44,15 +44,17 @@ class NodeService : Service() {
             try {
                 val node = File(applicationInfo.nativeLibraryDir, "libnode.so")
                 val appDir = extractNodeApp()
-                val pb = ProcessBuilder(node.absolutePath, File(appDir, "main.mjs").absolutePath)
+                // Use Node's bundled CA roots; the packaged runtime has no Termux-prefix CA store.
+                val pb = ProcessBuilder(node.absolutePath, "--use-bundled-ca", File(appDir, "main.mjs").absolutePath)
                     .directory(appDir)
                     .redirectErrorStream(true)
                 pb.environment().apply {
                     // libnode.so 若依賴 libc++_shared.so 等，放在同一個 nativeLibraryDir
                     put("LD_LIBRARY_PATH", applicationInfo.nativeLibraryDir)
                     put("LINE_MCP_HOME", filesDir.absolutePath)
-                    put("LINE_MCP_PORT", "47823")
-                    put("LINE_CONTROL_PORT", "47824")
+                    put("LINE_MCP_PORT", BuildConfig.MCP_PORT.toString())
+                    put("LINE_CONTROL_PORT", BuildConfig.CONTROL_PORT.toString())
+                    put("LINE_CONNECTOR_PORT", BuildConfig.CONNECTOR_PORT.toString())
                     // secreview SR-07：秘密改經 stdin 傳入（環境變數即使在 Node 端 delete，仍留在 /proc/<pid>/environ）
                     put("LMA_SECRETS_STDIN", "1")
                     // H-1：控制 API 只接受 HMAC 簽章請求（UI 從不送 Bearer）

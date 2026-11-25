@@ -1,0 +1,378 @@
+{
+  "schema": 1,
+  "production_ready": false,
+  "production_blockers": [
+    {
+      "id": "OPENSSL_36_EOL",
+      "component": "openssl",
+      "version": "1:3.6.5",
+      "reason": "OpenSSL 3.6 reached public end of life on 2026-11-01. The 2026-11-24 advisory explicitly excludes 3.6 from analysis. A supported, patched Android runtime and device regression validation are required before production approval.",
+      "sources": [
+        "https://openssl-library.org/post/2026-11-01-eol34-36/",
+        "https://openssl-library.org/news/secadv/20261124.txt"
+      ]
+    }
+  ],
+  "node_version": "24.22.3",
+  "node_source_sha256": "48ca3aa8a9b02133356922ef4fc80200e00598c80a4ef446f7c39a459222593d",
+  "termux_source_commit": "0e0d1929ab4047ce7407d881fa1b6ff421024640",
+  "termux_signer_fingerprint": "CC72CF8BA7DBFA0182877D045A897D96E57CF20C",
+  "repository": "https://packages.termux.dev/apt/termux-main/",
+  "snapshot_date": "2026-11-25T07:12:38Z",
+  "provenance_files": {
+    "termux-InRelease": "4b9cf89f2a26d5e715feca02df2c6beff138c573a7d3c4ce2908d71e48b37e09",
+    "termux-autobuilds.gpg": "21c385d5a30107453bd60582d64e2f6e5f5ce11e340ac05e57f943f9c0235420",
+    "termux-Packages-aarch64.gz": "edf28412156fbbdc0805aacd74e1cc540005acb5bac7346ddee553c97567b394",
+    "termux-Packages-x86_64.gz": "ba9f8de89fc48e5daf047e8ca3e810736569b24ba00f839ff76d280153b470e8",
+    "icu-79.1-LICENSE.txt": "e09827667e0bb3c808b2a463548ba814a5e6249b67353234d70c8dfc2bcc417d",
+    "ndk-r30-NOTICE.toolchain.txt": "6b8633011d874b75629180e60de13ebfd546a10e56dc7d0380a35f6609f30617"
+  },
+  "patchelf": {
+    "version": "0.18.0",
+    "url": "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz",
+    "sha256": "ce84f2447fb7a8679e58bc54a20dc2b01b37b5802e12c57eece772a6f14bf3f0",
+    "binary_sha256": "b699cb82300dfd08ea6c895d8829b46bea970cfa737fa34188d8256ca89404e5"
+  },
+  "packages": [
+    {
+      "Package": "nodejs-lts",
+      "Version": "24.22.3",
+      "Architecture": "aarch64",
+      "Filename": "pool/main/n/nodejs-lts/nodejs-lts_24.22.3_aarch64.deb",
+      "SHA256": "80edcc73db025db0baa09be27e3d65a16e6f2a72ab925f1873a1b808ab857c28",
+      "Size": "10000924",
+      "Depends": "libc++, openssl, c-ares, libicu, libsqlite, zlib",
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "libc++",
+      "Version": "30",
+      "Architecture": "aarch64",
+      "Filename": "pool/main/libc/libc++/libc++_30_aarch64.deb",
+      "SHA256": "53d0b84a7ba7459024257cb94d5b136fe13ef858567f65a8064b35950799f2ca",
+      "Size": "341604",
+      "Depends": null,
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "openssl",
+      "Version": "1:3.6.5",
+      "Architecture": "aarch64",
+      "Filename": "pool/main/o/openssl/openssl_1:3.6.5_aarch64.deb",
+      "SHA256": "a2fb7856875e63ef6b90442752e05974813372c3ca86d2513a78ea43c67a0f8b",
+      "Size": "2482764",
+      "Depends": "ca-certificates, zlib",
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "c-ares",
+      "Version": "1.34.9",
+      "Architecture": "aarch64",
+      "Filename": "pool/main/c/c-ares/c-ares_1.34.9_aarch64.deb",
+      "SHA256": "623d84855e176f3f2a415d24c0e1d2f529356f4b5439bb3313e6d7ff0da4585c",
+      "Size": "200208",
+      "Depends": "resolv-conf",
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "libicu",
+      "Version": "79.1",
+      "Architecture": "aarch64",
+      "Filename": "pool/main/libi/libicu/libicu_79.1_aarch64.deb",
+      "SHA256": "83c980a010e957738e3567127801d66a1b9bd7e404a4fda98788048ee57d606c",
+      "Size": "10312036",
+      "Depends": "libc++",
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "libsqlite",
+      "Version": "3.54.1-1",
+      "Architecture": "aarch64",
+      "Filename": "pool/main/libs/libsqlite/libsqlite_3.54.1-1_aarch64.deb",
+      "SHA256": "661fb995f7215845007b222a85266ae99d9443e87e0604f8677edfd738e6b81a",
+      "Size": "768888",
+      "Depends": "zlib",
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "zlib",
+      "Version": "1.4",
+      "Architecture": "aarch64",
+      "Filename": "pool/main/z/zlib/zlib_1.4_aarch64.deb",
+      "SHA256": "e3027565ae50bcd8ba5113c988b589754ae192c9cc3e6afbe3e4ed7c06b2598e",
+      "Size": "63780",
+      "Depends": null,
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "ca-certificates",
+      "Version": "1:2026.11.05-1",
+      "Architecture": "all",
+      "Filename": "pool/main/c/ca-certificates/ca-certificates_1:2026.11.05-1_all.deb",
+      "SHA256": "12fc350fc5ad638338b06b04835bce897615f8c93f96d30ac396cdb39b850c6b",
+      "Size": "110148",
+      "Depends": null,
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "nodejs-lts",
+      "Version": "24.22.3",
+      "Architecture": "x86_64",
+      "Filename": "pool/main/n/nodejs-lts/nodejs-lts_24.22.3_x86_64.deb",
+      "SHA256": "d73ab1303aa1a8ecca188795f536279c7ef196c4e3f72b645e443501b03247e4",
+      "Size": "10434768",
+      "Depends": "libc++, openssl, c-ares, libicu, libsqlite, zlib",
+      "indexArch": "x86_64"
+    },
+    {
+      "Package": "libc++",
+      "Version": "30",
+      "Architecture": "x86_64",
+      "Filename": "pool/main/libc/libc++/libc++_30_x86_64.deb",
+      "SHA256": "c9bcd9a8067a19c9c0e4893a72d314a2e37d6b67ce8dd05c67b9bbacad044b4f",
+      "Size": "367792",
+      "Depends": null,
+      "indexArch": "x86_64"
+    },
+    {
+      "Package": "openssl",
+      "Version": "1:3.6.5",
+      "Architecture": "x86_64",
+      "Filename": "pool/main/o/openssl/openssl_1:3.6.5_x86_64.deb",
+      "SHA256": "540f144592d23d35672976e175ede1b5d8cf464f153f646df5d4e6dcd8491a15",
+      "Size": "2164136",
+      "Depends": "ca-certificates, zlib",
+      "indexArch": "x86_64"
+    },
+    {
+      "Package": "c-ares",
+      "Version": "1.34.9",
+      "Architecture": "x86_64",
+      "Filename": "pool/main/c/c-ares/c-ares_1.34.9_x86_64.deb",
+      "SHA256": "ac96c37fcc9181d1a7095f60485457fe6c3d784a83b0e8e6e7af9b3bfceda237",
+      "Size": "210984",
+      "Depends": "resolv-conf",
+      "indexArch": "x86_64"
+    },
+    {
+      "Package": "libicu",
+      "Version": "79.1",
+      "Architecture": "x86_64",
+      "Filename": "pool/main/libi/libicu/libicu_79.1_x86_64.deb",
+      "SHA256": "541410d7b425ebde5d4027c86218081925b15dc1e5cffaa45449bdc4b2256251",
+      "Size": "10409436",
+      "Depends": "libc++",
+      "indexArch": "x86_64"
+    },
+    {
+      "Package": "libsqlite",
+      "Version": "3.54.1-1",
+      "Architecture": "x86_64",
+      "Filename": "pool/main/libs/libsqlite/libsqlite_3.54.1-1_x86_64.deb",
+      "SHA256": "497471806378934fec8a6f3b5db70cf52a3652828786a241e2e37eebc19112b0",
+      "Size": "815224",
+      "Depends": "zlib",
+      "indexArch": "x86_64"
+    },
+    {
+      "Package": "zlib",
+      "Version": "1.4",
+      "Architecture": "x86_64",
+      "Filename": "pool/main/z/zlib/zlib_1.4_x86_64.deb",
+      "SHA256": "55ab8f16e492d6ed03c2e2bf701af52cf54a313442dd7adedd3d6f3e3eba2e4f",
+      "Size": "74188",
+      "Depends": null,
+      "indexArch": "x86_64"
+    },
+    {
+      "Package": "ca-certificates",
+      "Version": "1:2026.11.05-1",
+      "Architecture": "all",
+      "Filename": "pool/main/c/ca-certificates/ca-certificates_1:2026.11.05-1_all.deb",
+      "SHA256": "12fc350fc5ad638338b06b04835bce897615f8c93f96d30ac396cdb39b850c6b",
+      "Size": "110148",
+      "Depends": null,
+      "indexArch": "x86_64"
+    },
+    {
+      "Package": "termux-licenses",
+      "Version": "2.2",
+      "Architecture": "all",
+      "Filename": "pool/main/t/termux-licenses/termux-licenses_2.2_all.deb",
+      "SHA256": "a3265cd1cf7d04754f2fb683eaf5b21918263792fd714457127900c1d6d9bcd9",
+      "Size": "52276",
+      "Depends": null,
+      "indexArch": "aarch64"
+    },
+    {
+      "Package": "termux-licenses",
+      "Version": "2.2",
+      "Architecture": "all",
+      "Filename": "pool/main/t/termux-licenses/termux-licenses_2.2_all.deb",
+      "SHA256": "a3265cd1cf7d04754f2fb683eaf5b21918263792fd714457127900c1d6d9bcd9",
+      "Size": "52276",
+      "Depends": null,
+      "indexArch": "x86_64"
+    }
+  ],
+  "outputs": {
+    "arm64-v8a": {
+      "libnode.so": "6662085ccfb09fbe715171a92ab638d91a1942d000cd19f5cef8dc9fafbc7b83",
+      "libtx_cares.so": "ca7a5ed1f9234f35df118102d7c01938163b3ad86ced8e8d706a5da2df528fd6",
+      "libtx_crypto.so": "64a048c496b63b7dc95aa59f785018bfc83a4889759a87694754d2c28f55e92d",
+      "libtx_cxx.so": "c7e589c31281b507e42b86cdc59183481dd6bfda8706192b3854b415df9a0927",
+      "libtx_icudata.so": "7da91309cd2641356be75c7931b13732e47ebcaefa5d919dc5aec7301c71dc6f",
+      "libtx_icui18n.so": "4123f5bc9e8b89a3cad3e0311d71c993c82e134daa1a90e8473620ca34b5c87f",
+      "libtx_icuuc.so": "18427c8de2ccc65ed9e3717e53db5b17e9094b1a55f4dcde1864692794ba117a",
+      "libtx_sqlite3.so": "ccaae9f637aafcb6cdf470ffc0a1259eeada3ba7a40dca232c2c4466116c08d7",
+      "libtx_ssl.so": "f11aebbdcd8b59b20ec9ce02a7a85fcc5a46ece51cd45bc15eb0e34c6341a5e2",
+      "libtx_z.so": "f935920bd044d86799bb4dee5ae6ce80f169b176867ac4f044a70345e1f7e19d"
+    },
+    "x86_64": {
+      "libnode.so": "55500484a05925bd0532e5bbca24204a93731395c9aa1ff32ed42fbb41e970cd",
+      "libtx_cares.so": "f24ca88ba608a641f72ac1f43debbfcd465c0e5e4d76777efdf19a2f030596b9",
+      "libtx_crypto.so": "196bdd0e4525ab926608874c03d7de9de3c0fd9c4110b05549e588460397ef64",
+      "libtx_cxx.so": "0d378e2ca1110d9389a4d762b345a5bed2122c0a35522e0162b6f8c6dd47dc44",
+      "libtx_icudata.so": "f373a302789e77de040bc41f76204d0dd25264ca6b2044e299c710015af5f59e",
+      "libtx_icui18n.so": "8d678c4dadebdd916d92208444ffe1f04949fc0baea0109fd18ce85043995b9c",
+      "libtx_icuuc.so": "866323c4f94a44a171843308d87b64e2e091a54b2ab905d55bd14c70e0cf3a72",
+      "libtx_sqlite3.so": "76b7767b9241763b04760480575af8532a3d81af2de007f0d65c1f1d6c930353",
+      "libtx_ssl.so": "b9ee13e440fcf86af25b639bdeeb3a99b69517ca014ecdcfac0851ded3669b4b",
+      "libtx_z.so": "cb725ff56d96b2bd26be08a1f5da838710d9fee2fcbe82ff869b2b38e863e610"
+    }
+  },
+  "notice_overrides": [
+    {
+      "package": "libicu",
+      "version": "79.1",
+      "filename": "icu-79.1-LICENSE.txt",
+      "destination": "libicu/LICENSE",
+      "source_url": "https://raw.githubusercontent.com/unicode-org/icu/ddc6b66926bfac6036144ca9902992a0d6d50af9/LICENSE",
+      "source_commit": "ddc6b66926bfac6036144ca9902992a0d6d50af9",
+      "sha256": "e09827667e0bb3c808b2a463548ba814a5e6249b67353234d70c8dfc2bcc417d",
+      "reason": "The signed Termux libicu 79.1 package contains the text 404: Not Found instead of its upstream license. Replace that notice with the exact upstream release LICENSE."
+    },
+    {
+      "package": "libc++",
+      "version": "30",
+      "filename": "ndk-r30-NOTICE.toolchain.txt",
+      "destination": "libc++/NDK-r30-NOTICE.toolchain",
+      "source_url": "https://android.googlesource.com/toolchain/prebuilts/ndk/r30/+/92537cd408ece74f1a3d0fe608932c14221e796e/NOTICE.toolchain?format=TEXT",
+      "source_commit": "92537cd408ece74f1a3d0fe608932c14221e796e",
+      "sha256": "6b8633011d874b75629180e60de13ebfd546a10e56dc7d0380a35f6609f30617",
+      "reason": "Supplement the signed Termux NCSA notice with the complete official Android NDK r30 toolchain notices, including libc++/libc++abi Apache-2.0 with LLVM exceptions and historical notices."
+    }
+  ],
+  "license_outputs": {
+    "licenses/aarch64/c-ares/copyright": "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807",
+    "licenses/aarch64/ca-certificates/copyright": "9bc20a15c61407693f16f5bb482035e60c9ac3e9c6611c6c3b6623a1a4453578",
+    "licenses/aarch64/libc++/NDK-r30-NOTICE.toolchain": "6b8633011d874b75629180e60de13ebfd546a10e56dc7d0380a35f6609f30617",
+    "licenses/aarch64/libc++/copyright": "aecb9504bcc76b4ff5e8ff1266344bb607b6bed2bfc3dd8b35233d941401d01e",
+    "licenses/aarch64/libicu/LICENSE": "e09827667e0bb3c808b2a463548ba814a5e6249b67353234d70c8dfc2bcc417d",
+    "licenses/aarch64/libsqlite/copyright": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+    "licenses/aarch64/nodejs-lts/copyright": "5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace",
+    "licenses/aarch64/openssl/copyright": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "licenses/aarch64/shared/AGPL-3.0-only.txt": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "licenses/aarch64/shared/AGPL-3.0-or-later.txt": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "licenses/aarch64/shared/AGPL-3.0.txt": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "licenses/aarch64/shared/Apache-2.0.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "licenses/aarch64/shared/Artistic-License-2.0.txt": "b06b8a07ae5c40f54601b8daa0b55645bbba3efd1f9a7b2e6a76edf1618297c3",
+    "licenses/aarch64/shared/BSL-1.0.txt": "7f8a88ce52c079968082b1b6fef5339f1af9171e6ea8cd7587ad0b64fff81ec3",
+    "licenses/aarch64/shared/CC0-1.0.txt": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+    "licenses/aarch64/shared/CeCILL-2.1.txt": "506e5ae49c2931f74b74fdf922fccbf20113eb226fb5f10c6f68b57d45621813",
+    "licenses/aarch64/shared/EPL-1.0.txt": "0435570a20c5b24623b98cbcd0b4d0340d5550007388cda4c6b198b0cfa14a86",
+    "licenses/aarch64/shared/EPL-2.0.txt": "2efc4c34579dc45f5e1776bbc56d0be3445b580516c65f3a19fe1d5c16a93b50",
+    "licenses/aarch64/shared/GPL-2.0-only.txt": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "licenses/aarch64/shared/GPL-2.0-or-later.txt": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "licenses/aarch64/shared/GPL-2.0.txt": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "licenses/aarch64/shared/GPL-3.0-only.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "licenses/aarch64/shared/GPL-3.0-or-later.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "licenses/aarch64/shared/GPL-3.0.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "licenses/aarch64/shared/ISC.txt": "45fefea443e839d010df68c932e5c3b1e31cc9b82f8b4f4ea801c6de0cbd58ca",
+    "licenses/aarch64/shared/ImageMagick.txt": "5b47db932754743460eba7a226aea85b63e3408d3c7affb4d0117f70c9594ded",
+    "licenses/aarch64/shared/LGPL-2.0-only.txt": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c",
+    "licenses/aarch64/shared/LGPL-2.0-or-later.txt": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c",
+    "licenses/aarch64/shared/LGPL-2.0.txt": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c",
+    "licenses/aarch64/shared/LGPL-2.1-only.txt": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "licenses/aarch64/shared/LGPL-2.1-or-later.txt": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "licenses/aarch64/shared/LGPL-2.1.txt": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "licenses/aarch64/shared/LGPL-3.0-only.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "licenses/aarch64/shared/LGPL-3.0-or-later.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "licenses/aarch64/shared/LGPL-3.0.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "licenses/aarch64/shared/MPL-2.0.txt": "9bc20a15c61407693f16f5bb482035e60c9ac3e9c6611c6c3b6623a1a4453578",
+    "licenses/aarch64/shared/NCSA.txt": "aecb9504bcc76b4ff5e8ff1266344bb607b6bed2bfc3dd8b35233d941401d01e",
+    "licenses/aarch64/shared/Nethack.txt": "93a3ae2cb8dee482daddfaebe53bcffe5b114b603def19b4dca21621cbc5a747",
+    "licenses/aarch64/shared/OpenLDAP.txt": "310fe25c858a9515fc8c8d7d1f24a67c9496f84a91e0a0e41ea9975b1371e569",
+    "licenses/aarch64/shared/PHP-3.0.txt": "e4f797cb2c221a206a34f575e142e7513546f64d10cd7d2ca11c76797c288dca",
+    "licenses/aarch64/shared/Public Domain.txt": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+    "licenses/aarch64/shared/Unlicense.txt": "88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd",
+    "licenses/aarch64/shared/VIM License.txt": "cfc1edda2b488ecd5b4f1504ea74f5d4a3965d717b5051a51d968ca0b58b3e65",
+    "licenses/aarch64/shared/WTFPL.txt": "96f17857f3eb28a7d93dad930bc099a3cb65a9a2afb37069bfd1ba5ec5964389",
+    "licenses/aarch64/shared/wxWindows.txt": "5ea1544b51a28bc823b03159190d4108f9fb4f4ef912389f5137c6d295e175b2",
+    "licenses/aarch64/termux-licenses/copyright": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "licenses/aarch64/zlib/copyright": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+    "licenses/x86_64/c-ares/copyright": "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807",
+    "licenses/x86_64/ca-certificates/copyright": "9bc20a15c61407693f16f5bb482035e60c9ac3e9c6611c6c3b6623a1a4453578",
+    "licenses/x86_64/libc++/NDK-r30-NOTICE.toolchain": "6b8633011d874b75629180e60de13ebfd546a10e56dc7d0380a35f6609f30617",
+    "licenses/x86_64/libc++/copyright": "aecb9504bcc76b4ff5e8ff1266344bb607b6bed2bfc3dd8b35233d941401d01e",
+    "licenses/x86_64/libicu/LICENSE": "e09827667e0bb3c808b2a463548ba814a5e6249b67353234d70c8dfc2bcc417d",
+    "licenses/x86_64/libsqlite/copyright": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+    "licenses/x86_64/nodejs-lts/copyright": "5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace",
+    "licenses/x86_64/openssl/copyright": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "licenses/x86_64/shared/AGPL-3.0-only.txt": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "licenses/x86_64/shared/AGPL-3.0-or-later.txt": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "licenses/x86_64/shared/AGPL-3.0.txt": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "licenses/x86_64/shared/Apache-2.0.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "licenses/x86_64/shared/Artistic-License-2.0.txt": "b06b8a07ae5c40f54601b8daa0b55645bbba3efd1f9a7b2e6a76edf1618297c3",
+    "licenses/x86_64/shared/BSL-1.0.txt": "7f8a88ce52c079968082b1b6fef5339f1af9171e6ea8cd7587ad0b64fff81ec3",
+    "licenses/x86_64/shared/CC0-1.0.txt": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+    "licenses/x86_64/shared/CeCILL-2.1.txt": "506e5ae49c2931f74b74fdf922fccbf20113eb226fb5f10c6f68b57d45621813",
+    "licenses/x86_64/shared/EPL-1.0.txt": "0435570a20c5b24623b98cbcd0b4d0340d5550007388cda4c6b198b0cfa14a86",
+    "licenses/x86_64/shared/EPL-2.0.txt": "2efc4c34579dc45f5e1776bbc56d0be3445b580516c65f3a19fe1d5c16a93b50",
+    "licenses/x86_64/shared/GPL-2.0-only.txt": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "licenses/x86_64/shared/GPL-2.0-or-later.txt": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "licenses/x86_64/shared/GPL-2.0.txt": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "licenses/x86_64/shared/GPL-3.0-only.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "licenses/x86_64/shared/GPL-3.0-or-later.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "licenses/x86_64/shared/GPL-3.0.txt": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "licenses/x86_64/shared/ISC.txt": "45fefea443e839d010df68c932e5c3b1e31cc9b82f8b4f4ea801c6de0cbd58ca",
+    "licenses/x86_64/shared/ImageMagick.txt": "5b47db932754743460eba7a226aea85b63e3408d3c7affb4d0117f70c9594ded",
+    "licenses/x86_64/shared/LGPL-2.0-only.txt": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c",
+    "licenses/x86_64/shared/LGPL-2.0-or-later.txt": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c",
+    "licenses/x86_64/shared/LGPL-2.0.txt": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c",
+    "licenses/x86_64/shared/LGPL-2.1-only.txt": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "licenses/x86_64/shared/LGPL-2.1-or-later.txt": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "licenses/x86_64/shared/LGPL-2.1.txt": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "licenses/x86_64/shared/LGPL-3.0-only.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "licenses/x86_64/shared/LGPL-3.0-or-later.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "licenses/x86_64/shared/LGPL-3.0.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    "licenses/x86_64/shared/MPL-2.0.txt": "9bc20a15c61407693f16f5bb482035e60c9ac3e9c6611c6c3b6623a1a4453578",
+    "licenses/x86_64/shared/NCSA.txt": "aecb9504bcc76b4ff5e8ff1266344bb607b6bed2bfc3dd8b35233d941401d01e",
+    "licenses/x86_64/shared/Nethack.txt": "93a3ae2cb8dee482daddfaebe53bcffe5b114b603def19b4dca21621cbc5a747",
+    "licenses/x86_64/shared/OpenLDAP.txt": "310fe25c858a9515fc8c8d7d1f24a67c9496f84a91e0a0e41ea9975b1371e569",
+    "licenses/x86_64/shared/PHP-3.0.txt": "e4f797cb2c221a206a34f575e142e7513546f64d10cd7d2ca11c76797c288dca",
+    "licenses/x86_64/shared/Public Domain.txt": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+    "licenses/x86_64/shared/Unlicense.txt": "88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd",
+    "licenses/x86_64/shared/VIM License.txt": "cfc1edda2b488ecd5b4f1504ea74f5d4a3965d717b5051a51d968ca0b58b3e65",
+    "licenses/x86_64/shared/WTFPL.txt": "96f17857f3eb28a7d93dad930bc099a3cb65a9a2afb37069bfd1ba5ec5964389",
+    "licenses/x86_64/shared/wxWindows.txt": "5ea1544b51a28bc823b03159190d4108f9fb4f4ef912389f5137c6d295e175b2",
+    "licenses/x86_64/termux-licenses/copyright": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "licenses/x86_64/zlib/copyright": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+  },
+  "maven_native_artifacts": [
+    {
+      "coordinate": "androidx.graphics:graphics-path:1.0.1",
+      "url": "https://dl.google.com/dl/android/maven2/androidx/graphics/graphics-path/1.0.1/graphics-path-1.0.1.aar",
+      "sha256": "8ca4032b6d79b351f0b59ad4b580eddbb9423e1652f7c958830687f1eee2ec03",
+      "size": 39380,
+      "outputs": {
+        "arm64-v8a": {
+          "libandroidx.graphics.path.so": "41e9a793c43a0f4fddb19e33f346bace464f30f888ba7b9eaf96294ea115bfb6"
+        },
+        "x86_64": {
+          "libandroidx.graphics.path.so": "4e56c996f13670e70082658de7880c4020eabf4f25e43387f88ed78a713fc9f0"
+        }
+      }
+    }
+  ]
+}

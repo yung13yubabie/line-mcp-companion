@@ -1,12 +1,14 @@
-node_modules/
+node_modules
 .state/
 *.db
 *.db-wal
 *.db-shm
 /android/.gradle/
+/android/.kotlin/
 /android/**/build/
 /android/local.properties
 android/app/src/main/assets/nodeapp/main.mjs
+android/app/src/main/assets/native-runtime/
 android/app/src/main/jniLibs/**/*.so
 # build outputs / artifacts
 dist/
@@ -37,3 +39,5 @@ node-android-work/
 avd/
 apks/
 *.log
+__pycache__/
+*.pyc

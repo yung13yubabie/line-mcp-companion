@@ -12,12 +12,13 @@
  * 7. 內容視為不可信：去掉 script/style/iframe…、只留純文字 ≤ 4000 字、標記提示注入
  */
 import { lookup as dnsLookup } from "node:dns/promises";
-import { isIP, BlockList } from "node:net";
-import { request as httpRequest, type IncomingMessage } from "node:http";
-import { request as httpsRequest } from "node:https";
-import type { LookupFunction } from "node:net";
+import { isIP } from "node:net";
+import type { IncomingMessage } from "node:http";
 import { SHORTENERS, scoreText, isMainstream } from "../scam/rules.ts";
 import { detectInjection } from "../ai/prompt.ts";
+import { isPublicIp } from "../net/public-address.ts";
+import { requestPinned, withDeadline, type RequestTransport } from "../net/bounded-request.ts";
+export { isPublicIp } from "../net/public-address.ts";
 
 export interface LinkResult {
 	ok: boolean;
@@ -34,46 +35,6 @@ export interface LinkResult {
 /** 內建的已知詐騙網域（示意；使用者可在設定加） */
 export const KNOWN_SCAM_DOMAINS = ["line-login.top", "line-verify.xyz", "165-npa.com", "post-tw.top", "tw-ezpost.com", "tw-taxrefund.com", "momo-refund.com"];
 const LINE_INVITE = /(^|\.)line\.me$|(^|\.)lin\.ee$/;
-
-const BLOCK = new BlockList();
-for (const [net, p, t] of [
-	["0.0.0.0", 8, "ipv4"],
-	["10.0.0.0", 8, "ipv4"],
-	["100.64.0.0", 10, "ipv4"],
-	["127.0.0.0", 8, "ipv4"],
-	["169.254.0.0", 16, "ipv4"],
-	["172.16.0.0", 12, "ipv4"],
-	["192.0.0.0", 24, "ipv4"],
-	["192.0.2.0", 24, "ipv4"],
-	["192.168.0.0", 16, "ipv4"],
-	["198.18.0.0", 15, "ipv4"],
-	["198.51.100.0", 24, "ipv4"],
-	["203.0.113.0", 24, "ipv4"],
-	["224.0.0.0", 4, "ipv4"],
-	["240.0.0.0", 4, "ipv4"],
-	["::", 128, "ipv6"],
-	["::1", 128, "ipv6"],
-	["64:ff9b::", 96, "ipv6"],
-	["100::", 64, "ipv6"],
-	["2001:db8::", 32, "ipv6"],
-	["fc00::", 7, "ipv6"],
-	["fe80::", 10, "ipv6"],
-	["ff00::", 8, "ipv6"],
-] as const)
-	BLOCK.addSubnet(net, p, t);
-
-export function isPublicIp(ip: string): boolean {
-	const v = isIP(ip);
-	if (!v) return false;
-	// IPv4-mapped / 相容位址：取出 IPv4 再檢查（BlockList 的 ::ffff:0:0/96 會誤配所有 IPv4）
-	const mapped = /^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/i.exec(ip)?.[1];
-	if (mapped) return isPublicIp(mapped);
-	if (v === 6 && /^::ffff:[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i.test(ip)) {
-		const [a, b] = ip.slice(7).split(":").map((x) => parseInt(x, 16));
-		return isPublicIp(`${a! >> 8}.${a! & 255}.${b! >> 8}.${b! & 255}`);
-	}
-	return !BLOCK.check(ip, v === 4 ? "ipv4" : "ipv6");
-}
 
 export function extractUrls(text: string | null | undefined): string[] {
 	if (!text) return [];
@@ -97,6 +58,8 @@ export interface LinkReaderOptions {
 	resolve?: (host: string) => Promise<string[]>;
 	isPublic?: (ip: string) => boolean;
 	fetchImpl?: typeof fetch;
+	/** Hermetic transport injection for tests; production uses direct pinned sockets. */
+	request?: RequestTransport;
 	timeoutMs?: number;
 	/** mock 模式：固定回應、不連網（release 不會設定） */
 	offline?: Record<string, { status: number; headers: Record<string, string>; body: string }>;
@@ -150,7 +113,8 @@ export class LinkReader {
 		return null;
 	}
 
-	async #safeBrowsing(urls: string[]): Promise<string | null> {
+	async #safeBrowsing(urls: string[], signal: AbortSignal): Promise<string | null> {
+		signal.throwIfAborted();
 		const key = this.#o.getSafeBrowsingKey?.();
 		if (!key) return null;
 		const f = this.#o.fetchImpl ?? fetch;
@@ -162,7 +126,7 @@ export class LinkReader {
 					client: { clientId: "line-mcp-companion", clientVersion: "0.2" },
 					threatInfo: { threatTypes: ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"], platformTypes: ["ANY_PLATFORM"], threatEntryTypes: ["URL"], threatEntries: urls.map((url) => ({ url })) },
 				}),
-				signal: AbortSignal.timeout(5000),
+				signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
 				redirect: "error",
 			});
 			if (!r.ok) return null; // 查不到不擋（但會在結果註明）
@@ -174,75 +138,47 @@ export class LinkReader {
 	}
 
 	/** 解析並挑一個公開 IP；任何一個位址不是公開的就整個擋（避免輪替） */
-	async #pinned(host: string): Promise<{ ip: string } | { blocked: string }> {
+	async #pinned(host: string, signal: AbortSignal): Promise<{ ip: string } | { blocked: string }> {
+		signal.throwIfAborted();
 		let ips: string[];
 		try {
 			ips = await this.#resolve(host);
 		} catch {
 			return { blocked: "dns_failed" };
 		}
+		signal.throwIfAborted();
 		if (!ips.length) return { blocked: "dns_failed" };
 		if (ips.some((ip) => !this.#public(ip))) return { blocked: "private_address" };
 		return { ip: ips[0]! };
 	}
 
 	/** 單次請求（不跟隨轉址），連線到已檢查的 IP */
-	async #req(u: URL, ip: string, method: "HEAD" | "GET"): Promise<{ status: number; headers: IncomingMessage["headers"]; body: Buffer; truncated: boolean }> {
+	async #req(u: URL, ip: string, method: "HEAD" | "GET", signal: AbortSignal): Promise<{ status: number; headers: IncomingMessage["headers"]; body: Buffer; truncated: boolean }> {
+		signal.throwIfAborted();
 		const off = this.#o.offline;
 		if (off) {
 			const p = off[u.toString()];
 			return { status: p?.status ?? 404, headers: p?.headers ?? { "content-type": "text/plain" }, body: Buffer.from(method === "HEAD" ? "" : (p?.body ?? "not found")), truncated: false };
 		}
-		return this.#netReq(u, ip, method);
-	}
-
-	#netReq(u: URL, ip: string, method: "HEAD" | "GET"): Promise<{ status: number; headers: IncomingMessage["headers"]; body: Buffer; truncated: boolean }> {
-		const lookup: LookupFunction = (_h, opts, cb) => {
-			if ((opts as { all?: boolean }).all) (cb as unknown as (e: null, a: { address: string; family: number }[]) => void)(null, [{ address: ip, family: isIP(ip) }]);
-			else cb(null, ip, isIP(ip));
-		};
-		const max = this.#o.maxBytes ?? 512 * 1024;
-		const timeout = this.#o.timeoutMs ?? 8000;
-		const fn = u.protocol === "https:" ? httpsRequest : httpRequest;
-		return new Promise((resolve, reject) => {
-			const req = fn(
-				u,
-				{ method, lookup, headers: { "user-agent": "Mozilla/5.0 (compatible; LineMcpCompanion-LinkPreview/0.2)", accept: "text/html,text/plain;q=0.9", "accept-encoding": "identity" }, timeout },
-				(res) => {
-					const chunks: Buffer[] = [];
-					let n = 0;
-					let truncated = false;
-					res.on("data", (c: Buffer) => {
-						if (n >= max) {
-							truncated = true;
-							res.destroy();
-							return;
-						}
-						chunks.push(c);
-						n += c.length;
-					});
-					const done = () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).subarray(0, max), truncated });
-					res.on("end", done);
-					res.on("close", done);
-					res.on("error", reject);
-				},
-			);
-			req.on("timeout", () => req.destroy(new Error("timeout")));
-			req.on("error", reject);
-			req.end();
+		return requestPinned(u, ip, {
+			signal, method, maxBytes: this.#o.maxBytes ?? 512 * 1024, truncate: true,
+			accept: "text/html,text/plain;q=0.9",
+			userAgent: "Mozilla/5.0 (compatible; LineMcpCompanion-LinkPreview/0.2)",
+			request: this.#o.request,
 		});
 	}
 
 	async read(raw: string): Promise<LinkResult> {
 		const hit = this.#cache.get(raw);
 		if (hit && Date.now() - hit.at < 3600_000) return hit.r;
-		const r = await this.#read(raw);
+		const r = await withDeadline(this.#o.timeoutMs ?? 8000, (signal) => this.#read(raw, signal))
+			.catch((error: Error): LinkResult => ({ ok: false, url: raw, blocked: `fetch_failed:${error.message.slice(0, 40)}` }));
 		this.#cache.set(raw, { at: Date.now(), r });
 		if (this.#cache.size > 200) this.#cache.delete(this.#cache.keys().next().value!);
 		return r;
 	}
 
-	async #read(raw: string): Promise<LinkResult> {
+	async #read(raw: string, signal: AbortSignal): Promise<LinkResult> {
 		const blocked = (reason: string, final?: string): LinkResult => ({ ok: false, url: raw, final_url: final, blocked: reason });
 		const s0 = this.staticCheck(raw);
 		if (s0) return blocked(s0);
@@ -250,12 +186,12 @@ export class LinkReader {
 		const chain = [u.toString()];
 		// 短網址 / 轉址：HEAD 展開，最多 3 跳，每跳都檢查
 		for (let hop = 0; hop <= 3; hop++) {
-			const p = await this.#pinned(bare(u.hostname));
+			const p = await this.#pinned(bare(u.hostname), signal);
 			if ("blocked" in p) return blocked(p.blocked, u.toString());
 			const isShort = domainMatch(hostOf(u), SHORTENERS);
 			let res;
 			try {
-				res = await this.#req(u, p.ip, isShort ? "HEAD" : "GET");
+				res = await this.#req(u, p.ip, isShort ? "HEAD" : "GET", signal);
 			} catch (e) {
 				return blocked(`fetch_failed:${(e as Error).message.slice(0, 40)}`, u.toString());
 			}
@@ -276,11 +212,11 @@ export class LinkReader {
 			if (isShort) {
 				// 短網址沒有轉址：不再抓內容
 				if (res.status >= 400) return blocked(`http_${res.status}`, u.toString());
-				const again = await this.#req(u, p.ip, "GET").catch(() => null);
+				const again = await this.#req(u, p.ip, "GET", signal).catch(() => null);
 				if (!again) return blocked("fetch_failed", u.toString());
 				res = again;
 			}
-			const sb = await this.#safeBrowsing(chain);
+			const sb = await this.#safeBrowsing(chain, signal);
 			if (sb) return blocked(sb, u.toString());
 			if (res.status >= 400) return blocked(`http_${res.status}`, u.toString());
 			const ct = String(res.headers["content-type"] ?? "").toLowerCase();
