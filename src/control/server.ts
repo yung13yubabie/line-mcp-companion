@@ -4,6 +4,9 @@
  * 請求本體上限 256KB；拒絕帶 Origin 的請求（瀏覽器網頁不能呼叫）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { OAuthServer } from "../mcp/oauth.ts";
+import type { QuickTunnel } from "../mcp/tunnel.ts";
+import { connectorSettings, normalizePublicUrl } from "../mcp/gateway.ts";
 import { timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Store } from "../storage/db.ts";
@@ -46,6 +49,12 @@ export interface ControlDeps {
 	rotateMcpToken?: () => string;
 	stickerImage?: (stickerId: string) => Promise<{ bytes: Uint8Array; mime: string }>;
 	syncStatus?: () => Record<string, unknown> | null;
+	/** 雲端連接器（OAuth 閘道 + 通道） */
+	connector?: {
+		oauth: OAuthServer;
+		gatewayPort: number;
+		tunnel: QuickTunnel | null;
+	} | null;
 }
 
 const SETTING_KEYS = new Set(["read_receipts", "sync_scope", "allow_key_registration", "scam_enabled", "scam_ai", "scam_scan_dm"]);
@@ -394,6 +403,62 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const t = need(deps.rotateMcpToken, "token rotation")();
 			deps.ai?.audit.log("ui", "mcp_token_rotated");
 			return { token: t };
+		},
+
+		// ---- 雲端連接器 ----
+		"GET /control/connector": () => {
+			const c = need(deps.connector, "connector");
+			const st = connectorSettings(deps.store);
+			return {
+				...st,
+				gateway: `http://127.0.0.1:${c.gatewayPort}`,
+				mcp_url: st.public_url ? `${st.public_url}/mcp` : null,
+				sse_url: st.public_url ? `${st.public_url}/sse` : null,
+				pairing: st.enabled ? c.oauth.pairingCode() : null,
+				clients: c.oauth.listClients(),
+				tunnel: c.tunnel?.status() ?? null,
+			};
+		},
+		"POST /control/connector": async (_u, req) => {
+			const b = await body(req);
+			need(deps.connector, "connector");
+			if (b.enabled !== undefined) {
+				deps.store.setSetting("connector_enabled", b.enabled ? "on" : "off");
+				deps.ai?.audit.log("ui", b.enabled ? "connector_enabled" : "connector_disabled");
+				if (!b.enabled) deps.connector?.tunnel?.stop();
+			}
+			if (b.public_url !== undefined) {
+				if (b.public_url === null || b.public_url === "") deps.store.setSetting("connector_public_url", "");
+				else {
+					try {
+						deps.store.setSetting("connector_public_url", normalizePublicUrl(String(b.public_url)));
+					} catch (e) {
+						throw new HttpError(400, (e as Error).message);
+					}
+				}
+			}
+			if (b.allow_static !== undefined) deps.store.setSetting("connector_allow_static", b.allow_static ? "on" : "off");
+			return connectorSettings(deps.store);
+		},
+		"POST /control/connector/pairing": () => need(deps.connector, "connector").oauth.pairingCode(true),
+		"POST /control/connector/revoke": async (_u, req) => {
+			const b = await body(req);
+			const id = b.client_id === "all" ? "all" : String(b.client_id ?? "");
+			if (!id) throw new HttpError(400, "client_id required");
+			return { revoked: need(deps.connector, "connector").oauth.revokeClient(id) };
+		},
+		"POST /control/connector/tunnel": async (_u, req) => {
+			const b = await body(req);
+			const c = need(deps.connector, "connector");
+			const t = need(c.tunnel, "tunnel");
+			if (b.action === "stop") {
+				t.stop();
+				return t.status();
+			}
+			if (!connectorSettings(deps.store).enabled) throw new HttpError(409, "enable the connector gateway first");
+			const st = await t.start(c.gatewayPort);
+			deps.ai?.audit.log("ui", "connector_tunnel", { ok: st.state === "up", detail: { state: st.state, error: st.error } });
+			return st;
 		},
 
 		// ---- 反詐 ----

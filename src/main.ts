@@ -35,6 +35,9 @@ import { LinejsSender } from "./ai/linejs-sender.ts";
 import { stickerUrl } from "./ai/stickers.ts";
 import { ScamDetector } from "./scam/detector.ts";
 import { ScamWarner } from "./scam/warner.ts";
+import { OAuthServer } from "./mcp/oauth.ts";
+import { startGateway, normalizePublicUrl } from "./mcp/gateway.ts";
+import { QuickTunnel } from "./mcp/tunnel.ts";
 
 const rootHome = process.env.LINE_MCP_HOME ?? ".state";
 // Mock 模式：只在 debug 建置可用（release bundle 以 LMA_INCLUDE_MOCK="0" 建置，整段被移除），資料放在獨立的 mock/ 目錄
@@ -205,6 +208,17 @@ async function stickerImage(id: string): Promise<{ bytes: Uint8Array; mime: stri
 }
 
 const mcpPort = Number(process.env.LINE_MCP_PORT ?? 47823);
+// 雲端連接器閘道（預設關；App 設定或 LMA_CONNECTOR=1 開啟）
+const oauth = new OAuthServer(store, audit);
+const tunnel = new QuickTunnel();
+const connectorPort = Number(process.env.LINE_CONNECTOR_PORT ?? 47825);
+if (process.env.LMA_CONNECTOR === "1") store.setSetting("connector_enabled", "on");
+if (process.env.LMA_CONNECTOR_PUBLIC_URL) store.setSetting("connector_public_url", normalizePublicUrl(process.env.LMA_CONNECTOR_PUBLIC_URL));
+// quick tunnel 網址每次都會變 → 自動更新公開網址
+tunnel.onUrl = (u) => {
+	if (u) store.setSetting("connector_public_url", u);
+	console.log(JSON.stringify({ event: "tunnel", url: u }));
+};
 let mcpStats: (() => import("./mcp/server.ts").McpStats) | null = null;
 const control = await startControlHttp(
 	{
@@ -220,6 +234,7 @@ const control = await startControlHttp(
 		mcpStats: () => mcpStats?.() ?? null,
 		rotateMcpToken: () => (mcpToken = genToken()),
 		stickerImage,
+		connector: { oauth, gatewayPort: connectorPort, tunnel },
 		syncStatus: () => (ctx.sync ? (ctx.sync.status() as unknown as Record<string, unknown>) : null),
 		info: () => ({
 			mock: MOCK,
@@ -235,7 +250,13 @@ const control = await startControlHttp(
 );
 const mcp = await startMcpHttp(ctx, { port: mcpPort, getToken: () => mcpToken, audit });
 mcpStats = mcp.stats;
-console.log(JSON.stringify({ event: "ready", control: control.url, mcp: mcp.url, mock: MOCK }));
+const gateway = await startGateway(ctx, { port: connectorPort, store, oauth, audit, getStaticToken: () => mcpToken });
+if (process.env.LMA_CONNECTOR === "1") {
+	// 桌面模式：配對碼印在 stderr（Android 上只在 App 畫面顯示）
+	console.error(JSON.stringify({ event: "connector", gateway: gateway.url, pairing_code: oauth.pairingCode().code, note: "pairing code valid 10 min; GET /control/connector for a new one" }));
+	if (process.env.LMA_TUNNEL === "cloudflare") void tunnel.start(connectorPort).then((st) => console.error(JSON.stringify({ event: "tunnel_status", ...st })));
+}
+console.log(JSON.stringify({ event: "ready", control: control.url, mcp: mcp.url, connector: gateway.url, mock: MOCK }));
 
 // 排程送出 / 過期清理
 setInterval(() => {
@@ -244,6 +265,11 @@ setInterval(() => {
 }, 5_000).unref?.();
 setInterval(() => events.prune(), 3_600_000).unref?.();
 
+for (const sig of ["SIGTERM", "SIGINT"] as const)
+	process.on(sig, () => {
+		tunnel.stop();
+		process.exit(0);
+	});
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e as Error)?.message ?? e));
 
 if (MOCK) await goMockOnline();

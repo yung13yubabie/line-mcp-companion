@@ -247,4 +247,35 @@ CREATE TABLE IF NOT EXISTS ai_log (
   detail         TEXT
 );
 CREATE INDEX IF NOT EXISTS ai_log_ts ON ai_log(ts);
+
+-- 雲端連接器 OAuth 2.1（只存雜湊，不存明文 token / code / secret）
+CREATE TABLE IF NOT EXISTS oauth_client (
+  client_id      TEXT PRIMARY KEY,
+  secret_hash    TEXT,
+  name           TEXT    NOT NULL,
+  redirect_uris  TEXT    NOT NULL,
+  auth_method    TEXT    NOT NULL,
+  created_at     INTEGER NOT NULL,
+  last_used_at   INTEGER
+);
+CREATE TABLE IF NOT EXISTS oauth_code (
+  code_hash      TEXT PRIMARY KEY,
+  client_id      TEXT    NOT NULL,
+  redirect_uri   TEXT    NOT NULL,
+  challenge      TEXT    NOT NULL,
+  scope          TEXT    NOT NULL,
+  resource       TEXT,
+  expires_at     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_token (
+  token_hash     TEXT PRIMARY KEY,
+  kind           TEXT    NOT NULL,   -- access | refresh
+  client_id      TEXT    NOT NULL,
+  scope          TEXT    NOT NULL,
+  family         TEXT    NOT NULL,
+  expires_at     INTEGER NOT NULL,
+  created_at     INTEGER NOT NULL,
+  used           INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS oauth_token_client ON oauth_token(client_id);
 `;
