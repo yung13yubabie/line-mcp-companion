@@ -35,6 +35,15 @@ export const REVIEW_TOOLS = ["list_pending", "edit_pending", "approve_pending", 
 /** 反詐工具（add_scam_sample 只能加 SCAM 範例） */
 export const SCAM_TOOLS = ["scan_scam_alerts", "list_scam_samples", "add_scam_sample", "compose_scam_warning", "mark_scam_false_positive", "trust_scam_member", "get_scam_log"] as const;
 
+/** ChatGPT 相容的 search / fetch（只讀） */
+export const FETCH_TOOLS = ["search", "fetch"] as const;
+
+/** 只讀工具：連接器（OAuth）只拿到 read scope 時只註冊這些 */
+export const READ_ONLY_TOOLS = new Set<string>([
+	"list_allowed_chats", "get_messages", "search_messages", "get_attachment", "download_media", "get_unread_summary", "get_sync_status", "trigger_sync",
+	"get_outbox_item", "list_stickers", "scan_scam_alerts", "list_scam_samples", "list_pending", "get_chat_trust", "get_ai_log", "get_scam_log", "search", "fetch",
+]);
+
 export const BASIC_TOOLS = [
 	"list_allowed_chats",
 	"get_messages",
@@ -45,7 +54,7 @@ export const BASIC_TOOLS = [
 	"get_sync_status",
 	"trigger_sync",
 ] as const;
-export type ToolName = (typeof BASIC_TOOLS)[number] | (typeof SEND_TOOLS)[number] | (typeof REVIEW_TOOLS)[number] | (typeof SCAM_TOOLS)[number];
+export type ToolName = (typeof BASIC_TOOLS)[number] | (typeof SEND_TOOLS)[number] | (typeof REVIEW_TOOLS)[number] | (typeof SCAM_TOOLS)[number] | (typeof FETCH_TOOLS)[number];
 
 /** 接受 epoch ms 或 ISO 字串 */
 export function toMs(v: unknown): number | undefined {
@@ -373,6 +382,43 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 			if (args.full === true) await ctx.sync.fullSync();
 			const added = await ctx.sync.pollOnce();
 			return { ok: true, added, status: ctx.sync.status() };
+		}
+
+		// ChatGPT（deep research / 公司知識）相容的 search / fetch：只讀、只在白名單內
+		case "search": {
+			const q = String(args.query ?? "").trim();
+			if (!q) return { results: [] };
+			const rows = store.searchMessages(q, whitelist.allowedIds(), 20).filter((m) => !m.hidden);
+			return {
+				results: rows.map((m) => ({
+					id: `${m.chat_id}:${m.id}`,
+					title: `${store.getChat(m.chat_id)?.name ?? m.chat_id}｜${m.sender_name ?? m.sender_mid}｜${new Date(m.sent_at).toISOString().slice(0, 16)}`,
+					url: `line-mcp://chat/${encodeURIComponent(m.chat_id)}/${encodeURIComponent(m.id)}`,
+				})),
+			};
+		}
+
+		case "fetch": {
+			const id = String(args.id ?? "");
+			const i = id.lastIndexOf(":");
+			if (i <= 0) throw new Error("id must be <chat_id>:<message_id> from search");
+			const chatId = id.slice(0, i);
+			const msgId = id.slice(i + 1);
+			whitelist.assert(chatId);
+			const m = store.getMessage(chatId, msgId);
+			if (!m || m.hidden) throw new Error("not_found");
+			// 前後文：前 5 則 + 本則 + 後 5 則（被隱藏的不含內容）
+			const before = store.getMessages(chatId, { before: m.sent_at, limit: 5 }).reverse();
+			const after = store.getMessages(chatId, { after: m.sent_at, limit: 500 }).reverse().slice(0, 5);
+			const line = (r: MessageRow) => `[${new Date(r.sent_at).toISOString().slice(0, 16)}] ${r.sender_name ?? r.sender_mid}: ${r.hidden ? "（已隱藏）" : (r.text ?? `[${r.content_type}]`)}`;
+			const text = [...before.map(line), "▶ " + line(m), ...after.filter((r) => r.id !== m.id).map(line)].join("\n");
+			return {
+				id,
+				title: `${store.getChat(chatId)?.name ?? chatId}｜${m.sender_name ?? m.sender_mid}`,
+				text,
+				url: `line-mcp://chat/${encodeURIComponent(chatId)}/${encodeURIComponent(msgId)}`,
+				metadata: { chat_id: chatId, message_id: msgId, sent_at: new Date(m.sent_at).toISOString() },
+			};
 		}
 
 		default:

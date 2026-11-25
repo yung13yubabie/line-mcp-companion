@@ -8,7 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { callTool, BASIC_TOOLS, SEND_TOOLS, REVIEW_TOOLS, SCAM_TOOLS, type ToolContext } from "./tools.ts";
+import { callTool, BASIC_TOOLS, SEND_TOOLS, REVIEW_TOOLS, SCAM_TOOLS, FETCH_TOOLS, READ_ONLY_TOOLS, type ToolContext } from "./tools.ts";
 import { PermissionDeniedError } from "../ai/policy.ts";
 import type { Audit } from "../ai/audit.ts";
 import { ChatNotAllowedError } from "../whitelist.ts";
@@ -90,14 +90,36 @@ const TOOL_DEFS: Record<string, { description: string; schema: Record<string, z.
 		schema: { chat_id: z.string().optional(), since: timeArg, until: timeArg, action: z.string().max(30).optional(), category: z.string().max(30).optional(), limit: z.number().int().min(1).max(500).optional() },
 	},
 	add_scam_sample: { description: "新增一則詐騙範例（只能新增 SCAM 類，最多 500 字）。", schema: { text: z.string().min(6).max(500), category: z.string().max(20).optional() } },
+	search: {
+		description: "Search the user's whitelisted LINE chats (read-only). Returns results [{id,title,url}]; pass an id to fetch. 搜尋允許的 LINE 會話訊息。",
+		schema: { query: z.string().min(1).max(200) },
+	},
+	fetch: {
+		description: "Fetch one LINE message with 5 messages of context before/after, by id from search (read-only). 取得一則訊息與前後文。",
+		schema: { id: z.string().min(3).max(200) },
+	},
 };
 
-export function buildMcpServer(ctx: ToolContext, hooks: { client?: string; onCall?: (name: string, ok: boolean, ms: number, code?: string) => void } = {}): McpServer {
+/** 會改變狀態但不送訊息的工具（不標 destructive） */
+const NON_DESTRUCTIVE_WRITE = new Set(["get_ai_suggestion", "edit_pending", "reject_pending", "mark_scam_false_positive", "trust_scam_member", "add_scam_sample"]);
+
+export interface BuildOptions {
+	client?: string;
+	onCall?: (name: string, ok: boolean, ms: number, code?: string) => void;
+	/** false = 只註冊只讀工具（OAuth 只給 read scope） */
+	allowWrite?: boolean;
+}
+
+export function buildMcpServer(ctx: ToolContext, hooks: BuildOptions = {}): McpServer {
 	const server = new McpServer({ name: "line-mcp-app", version: "0.2.1" });
-	const names: string[] = [...BASIC_TOOLS, ...(ctx.ai ? SEND_TOOLS : []), ...(ctx.ai ? REVIEW_TOOLS : []), ...(ctx.scam ? SCAM_TOOLS : [])];
+	let names: string[] = [...BASIC_TOOLS, ...FETCH_TOOLS, ...(ctx.ai ? SEND_TOOLS : []), ...(ctx.ai ? REVIEW_TOOLS : []), ...(ctx.scam ? SCAM_TOOLS : [])];
+	if (hooks.allowWrite === false) names = names.filter((n) => READ_ONLY_TOOLS.has(n));
 	for (const name of names) {
 		const def = TOOL_DEFS[name]!;
-		server.registerTool(name, { description: def.description, inputSchema: def.schema }, async (args: Record<string, unknown>) => {
+		const readOnly = READ_ONLY_TOOLS.has(name);
+		// ChatGPT 等用 annotations 判斷是否為寫入動作（寫入前會再問使用者）
+		const annotations = { readOnlyHint: readOnly, destructiveHint: !readOnly && !NON_DESTRUCTIVE_WRITE.has(name), openWorldHint: !readOnly, idempotentHint: readOnly };
+		server.registerTool(name, { description: def.description, inputSchema: def.schema, annotations }, async (args: Record<string, unknown>) => {
 			const t0 = Date.now();
 			try {
 				const result = await callTool(ctx, name, args, hooks.client);

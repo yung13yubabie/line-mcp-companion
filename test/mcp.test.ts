@@ -107,7 +107,14 @@ test("MCP over HTTP（127.0.0.1 + Bearer token）端到端", async () => {
 		const client = new Client({ name: "test", version: "0" });
 		await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: "Bearer test-token-0123456789" } } }));
 		const { tools } = await client.listTools();
-		assert.deepEqual(tools.map((t) => t.name).sort(), [...BASIC_TOOLS].sort());
+		assert.deepEqual(tools.map((t) => t.name).sort(), [...BASIC_TOOLS, "search", "fetch"].sort());
+		assert.equal(tools.find((t) => t.name === "search")!.annotations?.readOnlyHint, true);
+		// ChatGPT 相容 search / fetch
+		const sr = JSON.parse(((await client.callTool({ name: "search", arguments: { query: "便當" } })) as { content: { text: string }[] }).content[0]!.text);
+		assert.ok(sr.results.length >= 1 && typeof sr.results[0].id === "string" && sr.results[0].url.startsWith("line-mcp://"));
+		const fr = JSON.parse(((await client.callTool({ name: "fetch", arguments: { id: sr.results[0].id } })) as { content: { text: string }[] }).content[0]!.text);
+		assert.equal(fr.id, sr.results[0].id);
+		assert.ok(fr.text.includes("便當"));
 		const r = (await client.callTool({ name: "search_messages", arguments: { query: "便當" } })) as { content: { text: string }[] };
 		const hits = JSON.parse(r.content[0]!.text);
 		assert.equal(hits[0].text, "好啊 我帶便當");
