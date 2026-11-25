@@ -65,12 +65,16 @@
 | 受控 loopback TLS | 6 子項全過（TAP含父項為7） | 真正本機TLS；沒有連真供應商或私網服務 |
 | 基準 image／reader 缺陷觀測 | 3 項重現 | 只表示基準不安全行為被觀察到，不算安全測試通過 |
 | Native 獨立重打包 | 20 Node ELF＋94 notices 逐byte一致；另驗2個Maven ELF | 16個已下載.deb逐個hash／metadata核對；不是從source重新編譯 |
-| Maven下載hash基準 | 384 components／685 artifacts核對，0缺失／不符 | 以官方TLS下載建立checksum baseline；`verify-signatures=false`，不是JVM漏洞掃描 |
+| Maven下載hash基準 | 初次獨立核對384 components／685 artifacts，0缺失／不符；另補2份已核實的JUnit module，目前共687 artifacts | 以官方TLS下載建立checksum baseline；`verify-signatures=false`，不是JVM漏洞掃描 |
 | Android clean build | `--offline --dependency-verification strict clean :app:assembleReview` 成功 | Gradle 8.14.8、JDK21、SDK35；未作裝置啟動驗收 |
 
-凍結清單含133個非Markdown來源、測試與建置輸入，其manifest SHA-256為 `2751776f6b0da34306dc5d0354f0bafc583788306f69c22dbf3b08d3835fea09`，獨立核對無不符。這個值識別本輪測試快照，不能當安全覆蓋率。
+初次凍結清單含133個非Markdown來源、測試與建置輸入，其manifest SHA-256為 `2751776f6b0da34306dc5d0354f0bafc583788306f69c22dbf3b08d3835fea09`，獨立核對無不符。補齊下述2份JUnit module之後，最新manifest SHA-256為 `92ba4de129705d58e11d9f9d374a67452417bd8ab938cf361e146d3a86b5ba9a`，唯變動輸入為 `android/gradle/verification-metadata.xml`。這些值識別測試與覆驗快照，不能當安全覆蓋率。
 
 APK 下載必須搭配同次產物的 `SHA256SUMS`、`*-signature.txt`、`*-package.txt`、`native-runtime.lock.json` 與來源 commit。Review 的測試簽章可能隨乾淨建置環境改變，不能使用正式版既有 fingerprint 驗它，也不能將不同建置的 APK 混稱為同一產物。
+
+來源綁定以同次工作流程的 `source-commit.txt`、Git tree 與產物SHA-256為準；PR工作流程可能使用GitHub產生的merge commit，push工作流程使用分支head，兩者必須分開記錄。本機AGP的 `META-INF/version-control-info.textproto` 實測只有 `NO_SUPPORTED_VCS_FOUND`，沒有revision；不將它當成已成功嵌入來源commit的證據。
+
+首次GitHub Android工作流程在strict依賴驗證階段拒絕 `org.junit:junit-bom:5.9.2` 與 `5.9.3` 的 `.module`，原因是本機建立的清單漏列這兩份metadata。已從Maven Central兩個官方端點取得相同bytes，核對公開SHA-256／SHA-512後，只新增兩筆確切hash；沒有停用驗證、忽略失敗或放寬信任規則。原始失敗與修後工作流程紀錄均保留。
 
 封裝覆核曾因原生清單漏列既有 `libandroidx.graphics.path.so` 而拒絕 APK。已從官方 Google Maven 取得 `graphics-path:1.0.1` AAR，與 Maven checksum 基準及 APK bytes 逐一對照後納入精確清單。原始失敗紀錄保留；未知或不符雜湊的原生檔仍會被拒絕。
 
