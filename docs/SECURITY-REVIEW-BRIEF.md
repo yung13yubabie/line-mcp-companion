@@ -137,7 +137,7 @@ kill switch, stickers, injection, connector mode, scam rules/warnings/mentions).
 ```
 cd app
 npm install
-npm test                 # 42 tests, offline, no LINE login, no real AI calls
+npm test                 # 30 tests, offline, no LINE login, no real AI calls
 npm run typecheck
 npm run android:debug    # debug APKs with mock mode
 npm run android:release  # release APKs (mock purged, signed with ../keys/release.jks)
