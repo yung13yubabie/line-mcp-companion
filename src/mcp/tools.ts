@@ -5,6 +5,7 @@
  */
 import { readFileSync } from "node:fs";
 import type { Store, MessageRow } from "../storage/db.ts";
+import type { DigestStore, Digest } from "../storage/digests.ts";
 import { Whitelist } from "../whitelist.ts";
 import type { SyncEngine } from "../sync/engine.ts";
 import type { MediaCache } from "../media/cache.ts";
@@ -26,6 +27,7 @@ export interface ToolContext {
 	scam?: ScamDetector | null;
 	warner?: ScamWarner | null;
 	events?: EventLog | null;
+	digests?: DigestStore | null;
 }
 
 /** 進階工具：會送出訊息或呼叫 AI。全部受「MCP 白名單 + AI 代聊白名單 + 模式 + kill switch + 上限」控制。 */
@@ -35,13 +37,16 @@ export const REVIEW_TOOLS = ["list_pending", "edit_pending", "approve_pending", 
 /** 反詐工具（add_scam_sample 只能加 SCAM 範例） */
 export const SCAM_TOOLS = ["scan_scam_alerts", "list_scam_samples", "add_scam_sample", "compose_scam_warning", "mark_scam_false_positive", "trust_scam_member", "get_scam_log"] as const;
 
+/** 日報：AI 把整理好的重點寫回 App（內容加密保存、只限白名單） */
+export const DIGEST_TOOLS = ["save_digest", "list_digests", "get_digest", "delete_digest"] as const;
+
 /** ChatGPT 相容的 search / fetch（只讀） */
 export const FETCH_TOOLS = ["search", "fetch"] as const;
 
 /** 只讀工具：連接器（OAuth）只拿到 read scope 時只註冊這些 */
 export const READ_ONLY_TOOLS = new Set<string>([
 	"list_allowed_chats", "get_messages", "search_messages", "get_attachment", "download_media", "get_unread_summary", "get_sync_status", "trigger_sync",
-	"get_outbox_item", "list_stickers", "scan_scam_alerts", "list_scam_samples", "list_pending", "get_chat_trust", "get_ai_log", "get_scam_log", "search", "fetch",
+	"get_outbox_item", "list_stickers", "scan_scam_alerts", "list_scam_samples", "list_pending", "get_chat_trust", "get_ai_log", "get_scam_log", "search", "fetch", "list_digests", "get_digest",
 ]);
 
 export const BASIC_TOOLS = [
@@ -54,7 +59,7 @@ export const BASIC_TOOLS = [
 	"get_sync_status",
 	"trigger_sync",
 ] as const;
-export type ToolName = (typeof BASIC_TOOLS)[number] | (typeof SEND_TOOLS)[number] | (typeof REVIEW_TOOLS)[number] | (typeof SCAM_TOOLS)[number] | (typeof FETCH_TOOLS)[number];
+export type ToolName = (typeof BASIC_TOOLS)[number] | (typeof SEND_TOOLS)[number] | (typeof REVIEW_TOOLS)[number] | (typeof SCAM_TOOLS)[number] | (typeof FETCH_TOOLS)[number] | (typeof DIGEST_TOOLS)[number];
 
 /** 接受 epoch ms 或 ISO 字串 */
 export function toMs(v: unknown): number | undefined {
@@ -65,6 +70,31 @@ export function toMs(v: unknown): number | undefined {
 	const t = Date.parse(String(v));
 	if (Number.isNaN(t)) throw new Error(`invalid time: ${String(v)}`);
 	return t;
+}
+
+function digestView(d: Digest, brief: boolean) {
+	const iso = (t: number | null) => (t == null ? null : new Date(t).toISOString());
+	return {
+		id: d.id,
+		chat_id: d.chat_id,
+		chats: d.chats,
+		period_start: iso(d.period_start),
+		period_end: iso(d.period_end),
+		created_at: iso(d.created_at),
+		source: d.source,
+		title: d.title,
+		...(brief
+			? { items: d.items.length }
+			: {
+					items: d.items.map((it) => ({
+						headline: it.headline,
+						body: it.body,
+						first_sent_at: iso(it.first_sent_at),
+						last_sent_at: iso(it.last_sent_at),
+						sources: it.sources.map((s) => ({ chat_id: s.chat_id, message_id: s.message_id, sent_at: iso(s.sent_at) })),
+					})),
+				}),
+	};
 }
 
 function view(m: MessageRow) {
@@ -419,6 +449,46 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 				url: `line-mcp://chat/${encodeURIComponent(chatId)}/${encodeURIComponent(msgId)}`,
 				metadata: { chat_id: chatId, message_id: msgId, sent_at: new Date(m.sent_at).toISOString() },
 			};
+		}
+
+		case "save_digest": {
+			const ds = need(ctx.digests, "digests");
+			const ps = toMs(args.period_start);
+			const pe = toMs(args.period_end);
+			if (ps === undefined || pe === undefined) throw new Error("period_start and period_end required");
+			const d = ds.save(
+				{
+					chat_id: args.chat_id == null || args.chat_id === "" ? null : String(args.chat_id),
+					period_start: ps,
+					period_end: pe,
+					title: String(args.title ?? ""),
+					items: (Array.isArray(args.items) ? args.items : []) as never,
+					source: `mcp:${String(args.source ?? args.model ?? client ?? "connector")}`,
+				},
+				"mcp",
+			);
+			ctx.ai?.audit.log("mcp", "digest_saved", { chatId: d.chat_id, detail: { id: d.id, items: d.items.length, client } });
+			return digestView(d, false);
+		}
+
+		case "list_digests": {
+			const ds = need(ctx.digests, "digests");
+			const ids = args.chat_id ? [String(args.chat_id)] : null;
+			if (ids) whitelist.assert(ids[0]!);
+			return ds.list({ chatIds: ids, since: toMs(args.since), until: toMs(args.until), limit: args.limit === undefined ? 20 : Number(args.limit), respectWhitelist: true }).map((d) => digestView(d, true));
+		}
+
+		case "get_digest": {
+			const d = need(ctx.digests, "digests").get(Number(args.id), true);
+			if (!d) throw new Error("not_found");
+			return digestView(d, false);
+		}
+
+		case "delete_digest": {
+			const ok = need(ctx.digests, "digests").delete(Number(args.id), true);
+			if (!ok) throw new Error("not_found");
+			ctx.ai?.audit.log("mcp", "digest_deleted", { detail: { id: Number(args.id), client } });
+			return { deleted: true };
 		}
 
 		default:

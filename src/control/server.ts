@@ -5,6 +5,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { OAuthServer } from "../mcp/oauth.ts";
+import type { DigestStore } from "../storage/digests.ts";
 import type { QuickTunnel } from "../mcp/tunnel.ts";
 import { connectorSettings, normalizePublicUrl } from "../mcp/gateway.ts";
 import { timingSafeEqual } from "node:crypto";
@@ -49,6 +50,7 @@ export interface ControlDeps {
 	rotateMcpToken?: () => string;
 	stickerImage?: (stickerId: string) => Promise<{ bytes: Uint8Array; mime: string }>;
 	syncStatus?: () => Record<string, unknown> | null;
+	digests?: DigestStore | null;
 	/** 雲端連接器（OAuth 閘道 + 通道） */
 	connector?: {
 		oauth: OAuthServer;
@@ -192,7 +194,15 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 		"GET /control/messages": (url) => {
 			// UI 自己的檢視（使用者本人），不受 MCP 白名單限制；同樣不呼叫任何已讀 API
 			const chatId = url.searchParams.get("chat_id") ?? "";
-			const rows = store.getMessages(chatId, { limit: Math.min(500, Number(url.searchParams.get("limit") ?? 100)) });
+			// around=<message_id>：從日報跳回原訊息，回傳前後各 40 則
+			const around = url.searchParams.get("around");
+			const target = around ? store.getMessage(chatId, around) : undefined;
+			const rows = target
+				? [
+						...store.getMessages(chatId, { after: target.sent_at - 1, limit: 500 }).filter((m) => m.sent_at >= target.sent_at).slice(-41),
+						...store.getMessages(chatId, { before: target.sent_at, limit: 40 }),
+					]
+				: store.getMessages(chatId, { limit: Math.min(500, Number(url.searchParams.get("limit") ?? 100)) });
 			return rows.reverse().map((r) => {
 				const full = store.getMessage(chatId, r.id);
 				let meta: Record<string, unknown> | null = null;
@@ -403,6 +413,42 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const t = need(deps.rotateMcpToken, "token rotation")();
 			deps.ai?.audit.log("ui", "mcp_token_rotated");
 			return { token: t };
+		},
+
+		// ---- 日報 ----
+		"GET /control/digests": (url) => {
+			const ds = need(deps.digests, "digests");
+			const date = url.searchParams.get("date");
+			let since: number | undefined;
+			let until: number | undefined;
+			if (date) {
+				if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, "date must be YYYY-MM-DD");
+				since = Date.parse(`${date}T00:00:00+08:00`);
+				until = since + 86_400_000;
+			}
+			const chatIds = (url.searchParams.get("chat_ids") ?? "").split(",").filter(Boolean);
+			const list = ds.list({ chatIds, since, until, limit: 50 });
+			const names: Record<string, string> = {};
+			for (const d of list) for (const c of d.chats) names[c] ??= store.getChat(c)?.name ?? c;
+			return { digests: list, chat_names: names, can_generate: !!deps.ai && deps.ai.driver === "builtin" && deps.ai.hasKey() };
+		},
+		"POST /control/digests/delete": async (_u, req) => {
+			const b = await body(req);
+			const ok = need(deps.digests, "digests").delete(Number(b.id));
+			deps.ai?.audit.log("ui", "digest_deleted", { detail: { id: Number(b.id) } });
+			return { ok };
+		},
+		"POST /control/digests/generate": async (_u, req) => {
+			const b = await body(req);
+			const ai = need(deps.ai, "AI");
+			const date = String(b.date ?? "");
+			if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, "date must be YYYY-MM-DD");
+			const start = Date.parse(`${date}T00:00:00+08:00`);
+			try {
+				return await ai.generateDigest(String(b.chat_id ?? ""), start, start + 86_400_000, "ui");
+			} catch (e) {
+				throw new HttpError(e instanceof PermissionDeniedError ? 403 : 400, (e as Error).message);
+			}
 		},
 
 		// ---- 雲端連接器 ----

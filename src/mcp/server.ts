@@ -8,7 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { callTool, BASIC_TOOLS, SEND_TOOLS, REVIEW_TOOLS, SCAM_TOOLS, FETCH_TOOLS, READ_ONLY_TOOLS, type ToolContext } from "./tools.ts";
+import { callTool, BASIC_TOOLS, SEND_TOOLS, REVIEW_TOOLS, SCAM_TOOLS, FETCH_TOOLS, DIGEST_TOOLS, READ_ONLY_TOOLS, type ToolContext } from "./tools.ts";
 import { PermissionDeniedError } from "../ai/policy.ts";
 import type { Audit } from "../ai/audit.ts";
 import { ChatNotAllowedError } from "../whitelist.ts";
@@ -91,6 +91,32 @@ const TOOL_DEFS: Record<string, { description: string; schema: Record<string, z.
 		schema: { chat_id: z.string().optional(), since: timeArg, until: timeArg, action: z.string().max(30).optional(), category: z.string().max(30).optional(), limit: z.number().int().min(1).max(500).optional() },
 	},
 	add_scam_sample: { description: "新增一則詐騙範例（只能新增 SCAM 類，最多 500 字）。", schema: { text: z.string().min(6).max(500), category: z.string().max(20).optional() } },
+	save_digest: {
+		description:
+			"把你整理好的聊天日報寫回 App（『日報』畫面會以報紙版面顯示，點來源時間可跳回原訊息）。chat_id 省略 = 跨聊天日報，這時 source_message_ids 要寫成 \"<chat_id>:<message_id>\"。來源訊息必須屬於該聊天且在白名單；時間以 App 資料庫為準。內容是純文字（HTML 會被去掉），標題 ≤120 字、每則內文 ≤1200 字、最多 30 則。",
+		schema: {
+			chat_id: z.string().max(80).optional(),
+			period_start: timeArg.describe("期間開始（ISO 8601 或 epoch ms）"),
+			period_end: timeArg.describe("期間結束"),
+			title: z.string().min(1).max(200),
+			items: z
+				.array(
+					z.object({
+						headline: z.string().min(1).max(200),
+						body: z.string().max(2000).optional(),
+						source_message_ids: z.array(z.string().max(80)).max(50).optional(),
+						first_sent_at: z.string().max(40).optional().describe("可省略；App 會用來源訊息的實際時間"),
+						last_sent_at: z.string().max(40).optional(),
+					}),
+				)
+				.min(1)
+				.max(30),
+			source: z.string().max(60).optional().describe("模型 / 來源標籤，例如 Claude Sonnet"),
+		},
+	},
+	list_digests: { description: "列出已存的日報（只含白名單聊天；新到舊）。", schema: { chat_id: z.string().max(80).optional(), since: timeArg, until: timeArg, limit: z.number().int().min(1).max(100).optional() } },
+	get_digest: { description: "讀取一份日報（含每則來源訊息與時間）。", schema: { id: z.number().int() } },
+	delete_digest: { description: "刪除一份日報。", schema: { id: z.number().int() } },
 	search: {
 		description: "Search the user's whitelisted LINE chats (read-only). Returns results [{id,title,url}]; pass an id to fetch. 搜尋允許的 LINE 會話訊息。",
 		schema: { query: z.string().min(1).max(200) },
@@ -102,7 +128,7 @@ const TOOL_DEFS: Record<string, { description: string; schema: Record<string, z.
 };
 
 /** 會改變狀態但不送訊息的工具（不標 destructive） */
-const NON_DESTRUCTIVE_WRITE = new Set(["get_ai_suggestion", "edit_pending", "reject_pending", "mark_scam_false_positive", "trust_scam_member", "add_scam_sample"]);
+const NON_DESTRUCTIVE_WRITE = new Set(["save_digest", "get_ai_suggestion", "edit_pending", "reject_pending", "mark_scam_false_positive", "trust_scam_member", "add_scam_sample"]);
 
 export interface BuildOptions {
 	client?: string;
@@ -113,7 +139,7 @@ export interface BuildOptions {
 
 export function buildMcpServer(ctx: ToolContext, hooks: BuildOptions = {}): McpServer {
 	const server = new McpServer({ name: "line-mcp-app", version: "0.2.1" });
-	let names: string[] = [...BASIC_TOOLS, ...FETCH_TOOLS, ...(ctx.ai ? SEND_TOOLS : []), ...(ctx.ai ? REVIEW_TOOLS : []), ...(ctx.scam ? SCAM_TOOLS : [])];
+	let names: string[] = [...BASIC_TOOLS, ...FETCH_TOOLS, ...(ctx.digests ? DIGEST_TOOLS : []), ...(ctx.ai ? SEND_TOOLS : []), ...(ctx.ai ? REVIEW_TOOLS : []), ...(ctx.scam ? SCAM_TOOLS : [])];
 	if (hooks.allowWrite === false) names = names.filter((n) => READ_ONLY_TOOLS.has(n));
 	for (const name of names) {
 		const def = TOOL_DEFS[name]!;

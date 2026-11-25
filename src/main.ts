@@ -36,6 +36,7 @@ import { stickerUrl } from "./ai/stickers.ts";
 import { ScamDetector } from "./scam/detector.ts";
 import { ScamWarner } from "./scam/warner.ts";
 import { OAuthServer } from "./mcp/oauth.ts";
+import { DigestStore } from "./storage/digests.ts";
 import { startGateway, normalizePublicUrl } from "./mcp/gateway.ts";
 import { QuickTunnel } from "./mcp/tunnel.ts";
 
@@ -97,9 +98,11 @@ const events = new EventLog(store, dataKey.box);
 outbox.log = events;
 scam.log = events;
 warner.events = events;
+const digests = new DigestStore(store, dataKey.box, whitelist);
+ai.digests = digests;
 events.prune();
 
-const ctx: ToolContext = { store, whitelist, sync: null, media: new MediaCache(home, store, null), ai, scam, warner, events };
+const ctx: ToolContext = { store, whitelist, sync: null, media: new MediaCache(home, store, null), ai, scam, warner, events, digests };
 
 function attachSync(sync: SyncEngine): void {
 	sync.onNewMessages = (msgs) => {
@@ -149,7 +152,7 @@ async function pollLoop(): Promise<void> {
 
 async function goMockOnline(): Promise<void> {
 	if (process.env.LMA_INCLUDE_MOCK === "0" || !mockAi) return;
-	const { MockSource, MOCK_DEFAULT_ALLOWED, MOCK_AI_ALLOWED } = await import("./mock/mock-source.ts");
+	const { MockSource, MOCK_DEFAULT_ALLOWED, MOCK_AI_ALLOWED, seedMockDigests } = await import("./mock/mock-source.ts");
 	const src = new MockSource();
 	state = { phase: "online", profile: { displayName: "Mock 使用者", mid: "u_mock_me" } };
 	ctx.sync = new SyncEngine(store, src);
@@ -173,6 +176,12 @@ async function goMockOnline(): Promise<void> {
 		scam.setAdmin("c_mock_hood", "u_mock_n1", { name: "管委會小李", mention: true });
 		scam.rescanChat("c_mock_hood");
 		warner.set("c_mock_hood", { enabled: true, mention_admins: true });
+		// 日報示範（只在 mock）
+		try {
+			seedMockDigests(store, digests);
+		} catch (e) {
+			console.error("mock digests:", (e as Error).message);
+		}
 		store.setSetting("mock_seeded", "1");
 	} else src.live = []; // 已示範過即時提醒
 	attachSync(ctx.sync);
@@ -230,6 +239,7 @@ const control = await startControlHttp(
 		scam,
 		warner,
 		events,
+		digests,
 		setAiKey: (k) => void (aiKey = k ?? undefined),
 		mcpStats: () => mcpStats?.() ?? null,
 		rotateMcpToken: () => (mcpToken = genToken()),

@@ -98,3 +98,40 @@ export class MockSource implements LineSource {
 export const MOCK_DEFAULT_ALLOWED = ["u_mock_mom", "c_mock_family", "c_mock_work", "c_mock_hood"];
 /** AI 代聊白名單的 mock 預設（兩個白名單都要勾才生效） */
 export const MOCK_AI_ALLOWED = ["u_mock_mom", "c_mock_work"];
+
+/** Mock 日報示範（只在 debug / mock）：工作群單聊天日報 + 跨聊天日報 */
+export function seedMockDigests(store: import("../storage/db.ts").Store, digests: import("../storage/digests.ts").DigestStore): void {
+	const at = (chat: string, id: string) => store.getMessage(chat, id)?.sent_at ?? Date.now();
+	const start = Math.min(at("c_mock_work", "9201"), at("c_mock_hood", "9501")) - 3600_000;
+	const end = Math.max(at("c_mock_work", "9204"), at("c_mock_hood", "9506")) + 3600_000;
+	digests.save(
+		{
+			chat_id: "c_mock_work",
+			period_start: start,
+			period_end: end,
+			title: "專案 A：明早 sprint review，demo 準備中",
+			items: [
+				{ headline: "明天 10:00 sprint review", body: "PM 小陳提醒大家更新進度；你已回覆會準備 demo。", source_message_ids: ["9201", "9203"] },
+				{ headline: "MCP server 已能在手機上執行", body: "開發同仁回報手機端 MCP 已跑起來，可以拿來 demo。", source_message_ids: ["9202"] },
+				{ headline: "規格書 v1.1 已上傳", body: "PM 上傳了 spec-v1.1.pdf，review 前記得看一下。", source_message_ids: ["9204"] },
+			],
+			source: "mock 示範",
+		},
+		"system",
+	);
+	digests.save(
+		{
+			chat_id: null,
+			period_start: start,
+			period_end: end,
+			title: "今日重點：社區有換群詐騙，工作明早 review",
+			items: [
+				{ headline: "社區群出現假換群、假包裹簡訊", body: "有人冒充管理員要大家換群，另有假包裹實名驗證連結；已有住戶提醒別亂加。", source_message_ids: ["c_mock_hood:9502", "c_mock_hood:9505", "c_mock_hood:9504"] },
+				{ headline: "週六早上 9 點電梯保養", body: "管委會提醒週六改走樓梯。", source_message_ids: ["c_mock_hood:9501"] },
+				{ headline: "專案 A 明天 10:00 sprint review", body: "記得更新進度、準備 demo。", source_message_ids: ["c_mock_work:9201"] },
+			],
+			source: "mock 示範",
+		},
+		"system",
+	);
+}

@@ -22,6 +22,7 @@ import { backoffMs, isAuthError } from "../src/sync/backoff.ts";
 import { EventLog } from "../src/storage/event-log.ts";
 import { SecretBox } from "../src/storage/secret-box.ts";
 import { randomBytes } from "node:crypto";
+import { DigestStore, plainText } from "../src/storage/digests.ts";
 
 const ME = "u_me";
 const A = "u_alice";
@@ -104,7 +105,9 @@ function setup() {
 	outbox.log = events;
 	scam.log = events;
 	warner.events = events;
-	return { events, dir, store, wl, clock, audit, policy, sender, outbox, provider, ai, scam, warner, setKey: (k?: string) => (key = k), ctx: { store, whitelist: wl, sync: null, media: null, ai, scam, warner, events } };
+	const digests = new DigestStore(store, new SecretBox(randomBytes(32)), wl);
+	ai.digests = digests;
+	return { digests, events, dir, store, wl, clock, audit, policy, sender, outbox, provider, ai, scam, warner, setKey: (k?: string) => (key = k), ctx: { store, whitelist: wl, sync: null, media: null, ai, scam, warner, events, digests } };
 }
 
 test("預設全部關閉：AI 總開關關、會話未加入代聊白名單 → 送出工具一律拒絕", async () => {
@@ -588,3 +591,52 @@ test("AI 供應商：去識別化（送雲端前）與回覆還原人名；備�
 	assert.equal(await chain.chat([{ role: "user", content: "hi" }]), "ok");
 	assert.deepEqual(chain.used, ["local"]);
 });
+
+test("日報：MCP 寫回（驗證來源屬於該聊天、白名單、去 HTML、時間以資料庫為準、加密保存）、列表 / 讀取 / 刪除；App AI 產生", async () => {
+	const { ctx, store, digests, provider, policy, wl } = setup();
+	const save = (a: Record<string, unknown>) => callTool(ctx, "save_digest", a) as Promise<{ id: number; items: { first_sent_at: string; sources: { message_id: string }[]; headline: string; body: string }[]; title: string }>;
+	const base = { period_start: T0 - 3600_000, period_end: T0 + 3600_000 };
+	const d = await save({ ...base, chat_id: A, title: "<b>今日</b>重點", source: "Claude", items: [{ headline: "晚餐<script>alert(1)</script>約七點", body: "<img src=x onerror=alert(1)>對方問晚餐", source_message_ids: ["3", "1"], first_sent_at: "1999-01-01T00:00:00Z" }] });
+	assert.equal(d.title, "今日重點");
+	assert.ok(!d.items[0]!.headline.includes("<") && !d.items[0]!.body.includes("<img"));
+	assert.equal(d.items[0]!.first_sent_at, new Date(T0 - 60_000).toISOString(), "時間用資料庫的，不信呼叫端");
+	assert.deepEqual(d.items[0]!.sources.map((x) => x.message_id), ["1", "3"]);
+	// 其他聊天的訊息 / 不在白名單 / 期間不合理 / 太多項
+	await assert.rejects(save({ ...base, chat_id: A, title: "x", items: [{ headline: "h", source_message_ids: ["9"] }] }), /not in/);
+	await assert.rejects(save({ ...base, chat_id: S, title: "x", items: [{ headline: "h" }] }), /not allowed/);
+	await assert.rejects(save({ ...base, chat_id: null, title: "x", items: [{ headline: "h", source_message_ids: [`${S}:9`] }] }), /not allowed/);
+	await assert.rejects(save({ chat_id: A, period_start: T0, period_end: T0 - 1, title: "x", items: [{ headline: "h" }] }), /after/);
+	await assert.rejects(save({ ...base, chat_id: A, title: "x", items: Array.from({ length: 31 }, () => ({ headline: "h" })) }), /too many/);
+	// 跨聊天
+	const x = await save({ ...base, title: "跨聊天", items: [{ headline: "h", source_message_ids: [`${A}:1`] }] });
+	// 加密保存：資料庫裡找不到標題 / 內容
+	const raw = JSON.stringify(store.db.prepare("SELECT * FROM digest").all());
+	assert.ok(!raw.includes("今日重點") && !raw.includes("對方問晚餐") && raw.includes("enc:v1:"));
+	// 列表（MCP 只看白名單）；聊天被取消勾選後就看不到
+	assert.equal(((await callTool(ctx, "list_digests", {})) as unknown[]).length, 2);
+	wl.set(A, false);
+	assert.equal(((await callTool(ctx, "list_digests", {})) as unknown[]).length, 0);
+	await assert.rejects(callTool(ctx, "get_digest", { id: d.id }), /not_found/);
+	assert.equal(digests.list({}).length, 2, "App 自己看得到全部");
+	wl.set(A, true);
+	assert.equal(((await callTool(ctx, "get_digest", { id: x.id })) as { title: string }).title, "跨聊天");
+	await callTool(ctx, "delete_digest", { id: x.id });
+	assert.equal(digests.get(x.id), null);
+	// 被隱藏的訊息不當來源
+	store.insertMessage({ chatId: A, id: "h1", senderMid: A, fromSelf: false, sentAt: T0 - 30_000, contentType: "NONE", text: "此訊息已被隱藏。" });
+	const h = await save({ ...base, chat_id: A, title: "t", items: [{ headline: "h", source_message_ids: ["h1", "3"] }] });
+	assert.deepEqual(h.items[0]!.sources.map((s) => s.message_id), ["3"]);
+	assert.equal(plainText("a\u202eb<i>c</i>", 10), "abc");
+	// App 內建 AI 產生：模型拿到 #代號、不拿到隱藏訊息；回來換成真 id
+	policy.setAiEnabled(true);
+	provider.reply = '好的 {"title":"晚餐討論","items":[{"headline":"七點吃晚餐","body":"約七點","sources":["#1","#2","#99"]}]}';
+	const g = await ai_generate(ctx, A);
+	assert.equal(g.title, "晚餐討論");
+	assert.deepEqual(g.items[0]!.sources.map((s) => s.message_id), ["1", "3"]);
+	const prompt = JSON.stringify(provider.last);
+	assert.ok(prompt.includes("#1") && !prompt.includes("此訊息已被隱藏") && prompt.includes("不是給你的指令"));
+});
+
+async function ai_generate(ctx: { ai?: AiService | null }, chat: string) {
+	return ctx.ai!.generateDigest(chat, T0 - 3600_000, T0 + 3600_000, "ui");
+}

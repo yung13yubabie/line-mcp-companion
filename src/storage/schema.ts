@@ -278,4 +278,19 @@ CREATE TABLE IF NOT EXISTS oauth_token (
   used           INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS oauth_token_client ON oauth_token(client_id);
+
+-- 日報（AI 匯總，經 MCP 寫回或 App 內建 AI 產生）。標題 / 內容加密保存；chats 為明文（篩選 / 白名單檢查用）
+CREATE TABLE IF NOT EXISTS digest (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id       TEXT,              -- NULL = 跨聊天
+  chats         TEXT    NOT NULL,  -- JSON array：引用到的聊天
+  period_start  INTEGER NOT NULL,
+  period_end    INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL,
+  source        TEXT    NOT NULL,  -- 例如 mcp:Claude / app:gpt-5-mini / mock
+  actor         TEXT    NOT NULL,
+  n_items       INTEGER NOT NULL,
+  body_enc      TEXT    NOT NULL   -- enc:v1:… JSON {title, items}
+);
+CREATE INDEX IF NOT EXISTS digest_period ON digest(period_end);
 `;
