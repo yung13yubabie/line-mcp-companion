@@ -66,7 +66,7 @@ Listeners (both bind **127.0.0.1 only**; code refuses other hosts):
 | --- | --- | --- | --- |
 | 47823 | MCP `/mcp` (POST only, stateless JSON) | `Bearer` MCP token (≥16 chars, required — server refuses to start without one) | 120 req/min global, 10 send-tool calls/min, body ≤ 256 KB, headers timeout 10 s, request timeout 60 s, Origin ⇒ 403, non-loopback Host ⇒ 403 |
 | 47824 | Control `/control/*` (Kotlin UI only) | `Bearer` control token (≥16, required), timing-safe | body ≤ 256 KB, Origin ⇒ 403 |
-| 47825 | Connector gateway (cloud MCP clients; **off by default**, `connector_enabled`) — `/mcp` (Streamable HTTP), legacy `GET /sse` + `POST /messages`, OAuth endpoints, `/.well-known/*` | OAuth 2.1 access token (scope `line.read` / `line.send`) **or** the static MCP token (`connector_allow_static`, **default on** — see §7) | 120 req/min, 10 send-tool calls/min, 30 auth-endpoint req/min, body ≤ 256 KB, headers timeout 10 s; Host must equal the configured public URL host or loopback (else 403, anti DNS-rebinding); Origin allow-list (chatgpt.com, chat.openai.com, claude.ai, grok.com, gemini.google.com, Inspector on :6274) |
+| 47825 | Connector gateway (cloud MCP clients; **off by default**, `connector_enabled`) — `/mcp` (Streamable HTTP), legacy `GET /sse` + `POST /messages`, OAuth endpoints, `/.well-known/*` | OAuth 2.1 access token (scope `line.read` / `line.send`) **or** a separate gateway token `lmg_…` (`connector_allow_static`, **default off**; SHA-256 stored only, 30-day expiry, rotate/revoke, read-only unless send is enabled with biometric; audit `connector_static_*` — H-2) | 120 req/min, 10 send-tool calls/min, 30 auth-endpoint req/min, body ≤ 256 KB, headers timeout 10 s; Host must equal the configured public URL host or loopback (else 403, anti DNS-rebinding); Origin allow-list (chatgpt.com, chat.openai.com, claude.ai, grok.com, gemini.google.com, Inspector on :6274) |
 
 The gateway is reached from the internet only through a user-started HTTPS tunnel (`src/mcp/tunnel.ts`
 spawns `cloudflared tunnel --url http://127.0.0.1:47825` when the binary exists — desktop only; Android has
@@ -275,9 +275,9 @@ consent, token/refresh rotation + reuse revocation, scope ⇒ tool set, SSE).
   passes the policy + (by default) a human confirmation.
 - `src/style/lieflat/` is CC BY-NC 4.0 (non-commercial) — license constraint, not a security issue.
 - Tunnelling the gateway (47825) to the internet is user-initiated. The MCP port 47823 itself still rejects
-  non-loopback Host. **Static token on the gateway defaults ON** (`connector_allow_static`) for clients
-  without OAuth (xAI API remote MCP, Inspector); anyone holding the token over the tunnel gets full
-  read + send tools — reviewer: consider default OFF.
+  non-loopback Host. Gateway token (H-2, fixed): `connector_allow_static` defaults **off**; the gateway no longer
+  accepts the local MCP token, only a dedicated `lmg_` token (hash-only storage, 30-day TTL, rotate invalidates
+  the old one and resets to read-only). Read scope excludes `trigger_sync` (M-6). OAuth is the recommended path.
 - A quick-tunnel URL is public and unauthenticated at the edge; the only gates are OAuth / static token
   plus the pairing code at consent. Pairing code is 6 digits (lock-out 60 s after 5 tries ⇒ ~7,200 guesses/day max).
 - OAuth consent page and pairing code display are HTML/Compose only; no CSRF token beyond the one-time

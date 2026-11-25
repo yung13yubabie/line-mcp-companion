@@ -37,6 +37,7 @@ import { LinejsSender } from "./ai/linejs-sender.ts";
 import { stickerUrl } from "./ai/stickers.ts";
 import { ScamDetector } from "./scam/detector.ts";
 import { ScamWarner } from "./scam/warner.ts";
+import { GatewayToken } from "./mcp/gateway-token.ts";
 import { OAuthServer } from "./mcp/oauth.ts";
 import { DigestStore } from "./storage/digests.ts";
 import { DigestPoster } from "./ai/digest-post.ts";
@@ -291,6 +292,7 @@ const mcpPort = Number(process.env.LINE_MCP_PORT ?? 47823);
 // 雲端連接器閘道（預設關；App 設定或 LMA_CONNECTOR=1 開啟）
 const oauth = new OAuthServer(store, audit);
 const tunnel = new QuickTunnel();
+const gatewayToken = new GatewayToken(store, audit);
 const connectorPort = Number(process.env.LINE_CONNECTOR_PORT ?? 47825);
 if (process.env.LMA_CONNECTOR === "1") store.setSetting("connector_enabled", "on");
 if (process.env.LMA_CONNECTOR_PUBLIC_URL) store.setSetting("connector_public_url", normalizePublicUrl(process.env.LMA_CONNECTOR_PUBLIC_URL));
@@ -318,7 +320,7 @@ const control = await startControlHttp(
 		mcpStats: () => mcpStats?.() ?? null,
 		rotateMcpToken: () => (mcpToken = genToken()),
 		stickerImage,
-		connector: { oauth, gatewayPort: connectorPort, tunnel },
+		connector: { oauth, gatewayPort: connectorPort, tunnel, gatewayToken },
 		syncStatus: () => (ctx.sync ? (ctx.sync.status() as unknown as Record<string, unknown>) : null),
 		info: () => ({
 			mock: MOCK,
@@ -356,7 +358,7 @@ async function startMcp(): Promise<boolean> {
 if (!(await startMcp())) {
 	const retry = setInterval(() => void startMcp().then((ok) => ok && clearInterval(retry)), 30_000);
 }
-const gateway = await startGateway(ctx, { port: connectorPort, store, oauth, audit, getStaticToken: () => mcpToken });
+const gateway = await startGateway(ctx, { port: connectorPort, store, oauth, audit, gatewayToken });
 if (process.env.LMA_CONNECTOR === "1") {
 	// 桌面模式：配對碼印在 stderr（Android 上只在 App 畫面顯示）
 	console.error(JSON.stringify({ event: "connector", gateway: gateway.url, pairing_code: oauth.pairingCode().code, note: "pairing code valid 10 min; GET /control/connector for a new one" }));

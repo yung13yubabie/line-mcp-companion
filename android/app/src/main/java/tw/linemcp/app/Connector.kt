@@ -28,6 +28,7 @@ fun ConnectorSection(client: ControlClient, withAuth: (String, () -> Unit) -> Un
     var urlText by remember { mutableStateOf("") }
     var msg by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var newToken by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(tick) {
         var last = ""
         while (true) {
@@ -70,8 +71,36 @@ fun ConnectorSection(client: ControlClient, withAuth: (String, () -> Unit) -> Un
                 OutlinedButton(onClick = { if (showCode) showCode = false else withAuth("顯示連接器配對碼") { showCode = true } }) { Text(if (showCode) "遮起來" else "顯示") }
                 TextButton(onClick = { post("/connector/pairing", JSONObject()) }) { Text("換一組") }
             }
-            ToggleRow("也接受 MCP token（Bearer header）", d.optBoolean("allow_static"), "給 Claude Code、Gemini CLI、xAI API 這種可以自己帶 header 的用戶端；關掉只剩 OAuth") { v ->
-                post("/connector", JSONObject().put("allow_static", v))
+            HorizontalDivider()
+            // H-2：連接器專用 token（不是本機 MCP token）。預設關、預設只讀、30 天到期；建議優先用 OAuth
+            Text("進階：連接器專用 token（不建議）", fontWeight = FontWeight.Bold)
+            Text("只給不能跑 OAuth 的用戶端（xAI API、MCP Inspector）。任何拿到 token 的人都能從網路上讀你開放的聊天；優先用上面的 OAuth 配對。", fontSize = 12.sp, color = Warn)
+            ToggleRow("接受連接器專用 token", d.optBoolean("allow_static"), "預設關；跟本機 MCP token 分開") { v ->
+                if (v) withAuth("允許連接器 token") { post("/connector", JSONObject().put("allow_static", true)) } else post("/connector", JSONObject().put("allow_static", false))
+            }
+            val stt = d.optJSONObject("static_token")
+            if (d.optBoolean("allow_static")) {
+                if (stt?.optBoolean("exists") == true) {
+                    Text("到期：${fmtDateTime(stt.optLong("expires_at"))}${if (stt.optBoolean("expired")) "（已過期）" else ""} · 上次使用：${stt.optLong("last_used_at").let { if (it > 0) fmtDateTime(it) else "沒有" }}", fontSize = 12.sp, color = Color.Gray)
+                    ToggleRow("允許這個 token 送訊息", stt.optBoolean("allow_send"), "預設只讀；開啟要驗證身分，輪替後自動關回只讀") { v ->
+                        if (v) withAuth("允許連接器 token 送訊息") { post("/connector/static", JSONObject().put("action", "send").put("on", true)) } else post("/connector/static", JSONObject().put("action", "send").put("on", false))
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { withAuth("產生連接器 token") { scope.launch {
+                        runCatching { client.postObj("/connector/static", JSONObject().put("action", "rotate")) }.onSuccess { newToken = it.optString("token") }.onFailure { msg = friendly(it) }
+                        tick++
+                    } } }) { Text(if (stt?.optBoolean("exists") == true) "輪替（舊的立即失效）" else "產生 token（30 天）") }
+                    if (stt?.optBoolean("exists") == true) TextButton(onClick = { post("/connector/static", JSONObject().put("action", "revoke")) }) { Text("撤銷", color = Danger) }
+                }
+            }
+            newToken?.let { t ->
+                AlertDialog(onDismissRequest = { newToken = null }, title = { Text("連接器 token（只顯示這一次）") }, text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.foundation.text.selection.SelectionContainer { Text(t, fontFamily = FontFamily.Monospace, fontSize = 13.sp) }
+                        Text("30 天後到期。預設只讀。不要貼到截圖、聊天或公開設定檔。", fontSize = 12.sp, color = Warn)
+                    }
+                }, confirmButton = { TextButton(onClick = { newToken = null }) { Text("我存好了") } })
             }
             HorizontalDivider()
             val clients = d.optJSONArray("clients")?.objs() ?: emptyList()

@@ -14,9 +14,9 @@ import { OAuthServer, redirectOk } from "../src/mcp/oauth.ts";
 import { startGateway, normalizePublicUrl } from "../src/mcp/gateway.ts";
 import { buildMcpServer } from "../src/mcp/server.ts";
 import { Audit } from "../src/ai/audit.ts";
+import { GatewayToken, GATEWAY_TOKEN_TTL } from "../src/mcp/gateway-token.ts";
 import { FakeSource, ALICE } from "./fake-source.ts";
 
-const STATIC = "static-token-0123456789abcdef";
 const b64 = (b: Buffer) => b.toString("base64url");
 
 async function setup() {
@@ -32,7 +32,10 @@ async function setup() {
 	const oauth = new OAuthServer(store, audit);
 	const ctx = { store, whitelist, sync, media: null };
 	store.setSetting("connector_enabled", "on");
-	const gw = await startGateway(ctx, { port: 0, store, oauth, audit, getStaticToken: () => STATIC });
+	const gatewayToken = new GatewayToken(store, audit);
+	store.setSetting("connector_allow_static", "on");
+	const STATIC = gatewayToken.rotate("ui").token;
+	const gw = await startGateway(ctx, { port: 0, store, oauth, audit, gatewayToken });
 	const base = gw.url.replace("127.0.0.1", "localhost");
 	const close = () => {
 		gw.server.closeAllConnections();
@@ -40,7 +43,7 @@ async function setup() {
 		store.close();
 		rmSync(dir, { recursive: true, force: true });
 	};
-	return { store, oauth, gw, base, close, ctx, audit };
+	return { store, oauth, gw, base, close, ctx, audit, STATIC, gatewayToken };
 }
 
 /** 跑完整 OAuth：DCR → authorize（配對碼）→ token */
@@ -81,7 +84,7 @@ async function oauthFlow(base: string, oauth: OAuthServer, opts: { allowSend?: b
 }
 
 test("連接器閘道：中繼資料、401 挑戰、Host / Origin 檢查、關閉時 404", async () => {
-	const { base, store, close, gw } = await setup();
+	const { base, store, close, gw, STATIC } = await setup();
 	try {
 		const prm = (await (await fetch(`${base}/.well-known/oauth-protected-resource/mcp`)).json()) as { resource: string; authorization_servers: string[] };
 		assert.equal(prm.resource, `${base}/mcp`);
@@ -200,7 +203,7 @@ test("OAuth：refresh 輪換、重用撤銷整串、App 撤銷 client 立即失�
 });
 
 test("舊版 SSE 傳輸 + 靜態 token（xAI API / Claude Code 等可帶 header 的用戶端）", async () => {
-	const { base, close } = await setup();
+	const { base, close, STATIC } = await setup();
 	try {
 		const c = new Client({ name: "sse", version: "0" });
 		const h = { authorization: `Bearer ${STATIC}` };
@@ -210,6 +213,48 @@ test("舊版 SSE 傳輸 + 靜態 token（xAI API / Claude Code 等可帶 header 
 		const r = (await c.callTool({ name: "list_allowed_chats", arguments: {} })) as { content: { text: string }[] };
 		assert.ok(r.content[0]!.text.includes(ALICE));
 		await c.close();
+	} finally {
+		close();
+	}
+});
+
+test("H-2 連接器靜態 token：預設關、與 MCP token 分開、預設只讀、送出要另外開、30 天到期、輪替後舊的失效、只存雜湊", async () => {
+	const { base, store, close, STATIC, gatewayToken, audit } = await setup();
+	const tools = async (tok: string) => {
+		const c = new Client({ name: "t", version: "0" });
+		await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${tok}` } } }));
+		const n = (await c.listTools()).tools.map((t) => t.name);
+		await c.close();
+		return n;
+	};
+	const status = (tok: string) => fetch(`${base}/mcp`, { method: "POST", headers: { authorization: `Bearer ${tok}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }).then((r) => r.status);
+	try {
+		// 只存雜湊
+		assert.ok(!JSON.stringify(store.db.prepare("SELECT * FROM settings").all()).includes(STATIC));
+		assert.ok(STATIC.startsWith("lmg_"));
+		// 預設只讀：沒有送出類工具，也沒有 trigger_sync
+		const ro = await tools(STATIC);
+		assert.ok(ro.includes("search_messages") && !ro.includes("send_message") && !ro.includes("approve_pending") && !ro.includes("post_digest") && !ro.includes("trigger_sync"));
+		// 送出要另外開
+		gatewayToken.setSend(true, "ui");
+		assert.ok((await tools(STATIC)).includes("trigger_sync"), "開了送出權限才有寫入類工具（這個 ctx 沒有 AI，所以用 trigger_sync 代表）");
+		// 輪替：舊的立即失效、送出權限關回去
+		const t2 = gatewayToken.rotate("ui").token;
+		assert.equal(await status(STATIC), 401);
+		assert.ok(!(await tools(t2)).includes("trigger_sync"));
+		// 30 天到期
+		const g2 = new GatewayToken(store, audit, () => Date.now() + GATEWAY_TOKEN_TTL + 1000);
+		assert.equal(g2.verify(t2), null);
+		assert.equal(g2.status().expired, true);
+		// 預設關：沒設 connector_allow_static=on 就不收
+		store.setSetting("connector_allow_static", "");
+		assert.equal(await status(t2), 401);
+		// 撤銷
+		store.setSetting("connector_allow_static", "on");
+		gatewayToken.revoke("ui");
+		assert.equal(await status(t2), 401);
+		assert.ok(audit.recent({ limit: 50 }).some((e) => e.action === "connector_static_used"));
+		assert.ok(audit.recent({ limit: 50 }).some((e) => e.action === "connector_static_rotated"));
 	} finally {
 		close();
 	}

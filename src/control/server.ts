@@ -9,6 +9,7 @@ import type { DigestStore } from "../storage/digests.ts";
 import type { DigestPoster } from "../ai/digest-post.ts";
 import { type LinkReader, extractUrls } from "../links/reader.ts";
 import type { QuickTunnel } from "../mcp/tunnel.ts";
+import type { GatewayToken } from "../mcp/gateway-token.ts";
 import { connectorSettings, normalizePublicUrl } from "../mcp/gateway.ts";
 import { timingSafeEqual, createHmac, createHash, createDecipheriv } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -60,6 +61,7 @@ export interface ControlDeps {
 		oauth: OAuthServer;
 		gatewayPort: number;
 		tunnel: QuickTunnel | null;
+		gatewayToken?: GatewayToken;
 	} | null;
 }
 
@@ -602,6 +604,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 				sse_url: st.public_url ? `${st.public_url}/sse` : null,
 				pairing: st.enabled ? c.oauth.pairingCode() : null,
 				clients: c.oauth.listClients(),
+				static_token: c.gatewayToken?.status() ?? null,
 				tunnel: c.tunnel?.status() ?? null,
 			};
 		},
@@ -623,8 +626,30 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 					}
 				}
 			}
-			if (b.allow_static !== undefined) deps.store.setSetting("connector_allow_static", b.allow_static ? "on" : "off");
+			if (b.allow_static !== undefined) {
+				deps.store.setSetting("connector_allow_static", b.allow_static ? "on" : "off");
+				deps.ai?.audit.log("ui", b.allow_static ? "connector_static_enabled" : "connector_static_disabled");
+			}
 			return connectorSettings(deps.store);
+		},
+		// H-2：連接器專用 token（建立 / 輪替會回明文一次；送出權限 UI 端要生物辨識）
+		"POST /control/connector/static": async (_u, req) => {
+			const b = await body(req);
+			const g = need(need(deps.connector, "connector").gatewayToken, "gateway token");
+			if (b.action === "rotate") return g.rotate("ui");
+			if (b.action === "revoke") {
+				g.revoke("ui");
+				return g.status();
+			}
+			if (b.action === "send") {
+				try {
+					g.setSend(!!b.on, "ui");
+				} catch (e) {
+					throw new HttpError(409, (e as Error).message);
+				}
+				return g.status();
+			}
+			throw new HttpError(400, "action must be rotate | revoke | send");
 		},
 		"POST /control/connector/pairing": () => need(deps.connector, "connector").oauth.pairingCode(true),
 		"POST /control/connector/revoke": async (_u, req) => {
