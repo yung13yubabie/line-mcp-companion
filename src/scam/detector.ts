@@ -8,6 +8,7 @@
  * 只掃描 MCP 白名單內的會話；預設只掃群組（1 對 1 可另外開）。
  */
 import type { Store } from "../storage/db.ts";
+import type { EventLog } from "../storage/event-log.ts";
 import { scoreText, similarity, categoryOf } from "./rules.ts";
 import defaults from "./samples.default.json" with { type: "json" };
 import { neutralize } from "../ai/prompt.ts";
@@ -55,6 +56,7 @@ export const JUDGE_SYSTEM = [
 export class ScamDetector {
 	#store: Store;
 	judge: Judge | null = null;
+	log: EventLog | null = null;
 	constructor(store: Store) {
 		this.#store = store;
 	}
@@ -165,11 +167,17 @@ export class ScamDetector {
 	scanMessage(chatId: string, messageId: string): number | null {
 		if (!this.enabled || !this.#inScope(chatId)) return null;
 		const m = this.#store.getMessage(chatId, messageId);
-		if (!m || m.from_self === 1 || !m.text) return null;
-		if (m.sender_mid && this.isTrusted(chatId, m.sender_mid)) return null;
+		if (!m || m.from_self === 1 || !m.text || m.hidden) return null;
 		const e = this.evaluate(m.text);
 		if (!e.level) return null;
 		const category = categoryOf(e.rules, m.text, e.sample?.category);
+		const logBase = { chat_id: chatId, message_id: messageId, sender_mid: m.sender_mid, sender_name: m.sender_name, text: m.text, level: e.level, score: e.score, category, rules: e.rules };
+		if (m.sender_mid && this.isTrusted(chatId, m.sender_mid)) {
+			// 信任成員：不建立警示、不提醒，但記一筆（同一則只記一次）
+			const seen = this.#store.db.prepare("SELECT 1 FROM scam_log WHERE chat_id = ? AND message_id = ?").get(chatId, messageId);
+			if (!seen) this.log?.scam({ ...logBase, action: "suppressed_member" });
+			return null;
+		}
 		const r = this.#store.db
 			.prepare(
 				`INSERT OR IGNORE INTO scam_alert(chat_id, message_id, score, level, rules, sample_id, similarity, category, created_at)
@@ -178,6 +186,7 @@ export class ScamDetector {
 			.run(chatId, messageId, e.score, e.level, JSON.stringify(e.rules), e.sample?.id ?? null, e.similarity || null, category, Date.now());
 		if (Number(r.changes) === 0) return null;
 		const id = Number(r.lastInsertRowid);
+		this.log?.scam({ ...logBase, action: "alert_only", alert_id: id });
 		if (this.aiEnabled && this.judge) void this.#aiJudge(id, m.text).catch(() => {});
 		return id;
 	}
@@ -236,6 +245,26 @@ export class ScamDetector {
 			)
 			.all(...a, Math.min(500, opts.limit ?? 100)) as Record<string, unknown>[];
 		return rows.map((r) => ({ ...(r as unknown as ScamAlert), rules: JSON.parse(String(r.rules)) as string[] }));
+	}
+
+	/**
+	 * 誤判：把警示標成 dismissed，並（預設）把發送者加入這群的信任成員（不 @、之後不再提醒）。
+	 * 取消針對這則的待確認提醒由呼叫端（Outbox）處理。
+	 */
+	markFalsePositive(alertId: number, trustMember = true): { chat_id: string; message_id: string; sender_mid: string | null; trusted: boolean } {
+		const a = this.#store.db.prepare("SELECT chat_id, message_id FROM scam_alert WHERE id = ?").get(alertId) as { chat_id: string; message_id: string } | undefined;
+		if (!a) throw new Error("alert not found");
+		const c = this.#store.getChat(a.chat_id);
+		if (!c || c.allowed !== 1) throw new Error("chat not found or not allowed for MCP access");
+		const m = this.#store.getMessage(a.chat_id, a.message_id);
+		this.setStatus(alertId, "dismissed");
+		let trusted = false;
+		if (trustMember && m?.sender_mid && !m.from_self) {
+			if (!this.isTrusted(a.chat_id, m.sender_mid)) this.setAdmin(a.chat_id, m.sender_mid, { mention: false });
+			trusted = true;
+		}
+		this.log?.setScamAction({ alertId }, "false_positive", trusted ? "member trusted" : null);
+		return { ...a, sender_mid: m?.sender_mid ?? null, trusted };
 	}
 
 	setStatus(id: number, status: "new" | "seen" | "dismissed"): boolean {

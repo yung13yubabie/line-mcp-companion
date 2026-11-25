@@ -8,7 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { callTool, BASIC_TOOLS, SEND_TOOLS, SCAM_TOOLS, type ToolContext } from "./tools.ts";
+import { callTool, BASIC_TOOLS, SEND_TOOLS, REVIEW_TOOLS, SCAM_TOOLS, type ToolContext } from "./tools.ts";
 import { PermissionDeniedError } from "../ai/policy.ts";
 import type { Audit } from "../ai/audit.ts";
 import { ChatNotAllowedError } from "../whitelist.ts";
@@ -58,12 +58,43 @@ const TOOL_DEFS: Record<string, { description: string; schema: Record<string, z.
 		schema: { since: timeArg, chat_id: z.string().optional(), min_level: z.enum(["suspicious", "high"]).optional(), limit: z.number().int().min(1).max(200).optional() },
 	},
 	list_scam_samples: { description: "列出詐騙判斷範例（SCAM / OK）。", schema: { label: z.enum(["SCAM", "OK"]).optional(), category: z.string().max(20).optional(), limit: z.number().int().min(1).max(500).optional() } },
+	list_pending: { description: "列出確認佇列（等使用者核准）中的項目：AI 回覆、反詐提醒等。只含白名單會話。", schema: { chat_id: z.string().optional() } },
+	edit_pending: {
+		description: "修改確認佇列中的項目（文字或貼圖），修改後仍在佇列等核准。反詐提醒文字可自由改寫，但不可含連結或引用詐騙內容。",
+		schema: { id: z.number().int(), text: z.string().max(2000).optional(), sticker: z.object({ package_id: z.string(), sticker_id: z.string() }).optional() },
+	},
+	approve_pending: {
+		description: "核准（可同時改文字）確認佇列中的項目。需要使用者在 App 開啟「允許 MCP 核准佇列」（預設關），否則會失敗。仍受上限 / 緊急停止限制。",
+		schema: { id: z.number().int(), text: z.string().max(2000).optional() },
+	},
+	reject_pending: { description: "退回確認佇列中的項目（不送出）。", schema: { id: z.number().int() } },
+	get_chat_trust: { description: "查詢各會話的信任狀態（AI 回覆、反詐提醒分開）：REVIEW = 每則先進確認佇列；AUTO = 直接送。", schema: { chat_id: z.string().optional() } },
+	set_chat_trust: {
+		description:
+			"設定會話的信任狀態。降回 REVIEW 永遠可以；升級到 AUTO 需要使用者在 App 開啟「允許 MCP 升級到 AUTO」（預設關）並傳 confirm_auto=true。每次變更都會記錄。",
+		schema: { chat_id: z.string(), feature: z.enum(["ai", "scam"]), state: z.enum(["REVIEW", "AUTO", "review", "auto"]), confirm_auto: z.boolean().optional(), reason: z.string().max(60).optional() },
+	},
+	get_ai_log: {
+		description: "AI 代聊紀錄：觸發訊息、產生的回覆、修改、核准 / 退回、送出時間。",
+		schema: { chat_id: z.string().optional(), since: timeArg, until: timeArg, event: z.string().max(20).optional(), limit: z.number().int().min(1).max(500).optional() },
+	},
+	compose_scam_warning: {
+		description:
+			"針對某則訊息寫一則反詐提醒（引用回覆）。text 可自由寫（可用 {category} {tip} {admins} {sender}），省略則用該群範本；不可含連結、LINE ID 或引用詐騙內容，LINE 禁字會自動替換。依該群反詐信任狀態進佇列或直接送。",
+		schema: { chat_id: z.string(), message_id: z.string().max(64), text: z.string().max(300).optional() },
+	},
+	mark_scam_false_positive: { description: "把一則反詐警示標成誤判，取消尚未送出的提醒；trust_member（預設 true）會把發送者加入這群的信任成員。", schema: { alert_id: z.number().int(), trust_member: z.boolean().optional() } },
+	trust_scam_member: { description: "把成員加入 / 移出這群的反詐信任名單（信任成員的訊息不會觸發提醒）。mention=true 代表提醒時 @ 他（管理員）。", schema: { chat_id: z.string(), member_id: z.string().max(64), mention: z.boolean().optional(), remove: z.boolean().optional() } },
+	get_scam_log: {
+		description: "反詐紀錄：每次偵測的會話、發送者、時間、訊息、類型 / 規則、處理結果（queued / sent / suppressed_member / cooldown…）。",
+		schema: { chat_id: z.string().optional(), since: timeArg, until: timeArg, action: z.string().max(30).optional(), category: z.string().max(30).optional(), limit: z.number().int().min(1).max(500).optional() },
+	},
 	add_scam_sample: { description: "新增一則詐騙範例（只能新增 SCAM 類，最多 500 字）。", schema: { text: z.string().min(6).max(500), category: z.string().max(20).optional() } },
 };
 
 export function buildMcpServer(ctx: ToolContext, hooks: { client?: string; onCall?: (name: string, ok: boolean, ms: number, code?: string) => void } = {}): McpServer {
 	const server = new McpServer({ name: "line-mcp-app", version: "0.2.0" });
-	const names: string[] = [...BASIC_TOOLS, ...(ctx.ai ? SEND_TOOLS : []), ...(ctx.scam ? SCAM_TOOLS : [])];
+	const names: string[] = [...BASIC_TOOLS, ...(ctx.ai ? SEND_TOOLS : []), ...(ctx.ai ? REVIEW_TOOLS : []), ...(ctx.scam ? SCAM_TOOLS : [])];
 	for (const name of names) {
 		const def = TOOL_DEFS[name]!;
 		server.registerTool(name, { description: def.description, inputSchema: def.schema }, async (args: Record<string, unknown>) => {
@@ -158,7 +189,7 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
 	}
 }
 
-const SEND_SET = new Set<string>(["send_message", "generate_and_send_image"]);
+const SEND_SET = new Set<string>(["send_message", "generate_and_send_image", "approve_pending", "set_chat_trust", "compose_scam_warning"]);
 
 function sendCalls(body: unknown): number {
 	const arr = Array.isArray(body) ? body : [body];

@@ -112,6 +112,7 @@ fun SettingsScreen(client: ControlClient) {
                         .onFailure { msg = friendly(it) }
                 }
             } }) { Text("🔄 換一組新 token") }
+            msg?.let { Text(it, color = Warn, fontSize = 13.sp) }
         }
         Section("狀態") {
             Text("已讀回條：${if (info?.optString("read_receipts") == "blocked") "封鎖中" else info?.optString("read_receipts") ?: "-"}")
@@ -139,7 +140,6 @@ fun SettingsScreen(client: ControlClient) {
                 OutlinedButton(onClick = { mock = false; scope.launch(Dispatchers.IO) { MockMode.purge(ctx); restartNode() } }) { Text("清除全部 Mock 資料") }
             }
         }
-        msg?.let { Text(it, color = Warn, fontSize = 13.sp) }
         Spacer(Modifier.height(16.dp))
     }
     if (showDisclaimer) AlertDialog(onDismissRequest = { showDisclaimer = false }, confirmButton = { TextButton(onClick = { showDisclaimer = false }) { Text("知道了") } },

@@ -1,4 +1,4 @@
-import type { Store } from "../storage/db.ts";
+import { isHiddenText, type Store } from "../storage/db.ts";
 import type { LineSource, SourceMessage } from "./types.ts";
 
 export type SyncScope = "allowed" | "all";
@@ -27,6 +27,8 @@ export class SyncEngine {
 	#running: Promise<void> | null = null;
 	/** 增量同步寫入新訊息後呼叫（AI 引擎、反詐偵測）；例外不影響同步 */
 	onNewMessages: ((msgs: { chatId: string; id: string; fromSelf: boolean }[]) => void) | null = null;
+	/** 訊息被隱藏 / 收回 / 刪除（含之後才收到「此訊息已被隱藏。」的同 id 訊息） */
+	onHidden: ((items: { chatId: string; id: string; reason: string }[]) => void) | null = null;
 
 	constructor(store: Store, src: LineSource) {
 		this.#store = store;
@@ -81,6 +83,7 @@ export class SyncEngine {
 		const inScope = (chatId: string) => this.scope === "all" || this.#store.getChat(chatId)?.allowed === 1;
 		let added = 0;
 		const fresh: { chatId: string; id: string; fromSelf: boolean }[] = [];
+		const hidden: { chatId: string; id: string; reason: string }[] = [];
 		this.#store.transaction(() => {
 			for (const op of ops) {
 				if (op.kind === "message" && op.message) {
@@ -89,7 +92,11 @@ export class SyncEngine {
 					if (inScope(m.chatId) && this.#write(m)) {
 						added++;
 						fresh.push({ chatId: m.chatId, id: m.id, fromSelf: m.fromSelf });
+					} else if (isHiddenText(m.text) && this.#store.markHidden(m.chatId, m.id, "hidden_text")) {
+						hidden.push({ chatId: m.chatId, id: m.id, reason: "hidden_text" });
 					}
+				} else if (op.kind === "hidden" && op.hidden) {
+					if (this.#store.markHidden(op.hidden.chatId, op.hidden.messageId, op.hidden.reason)) hidden.push({ chatId: op.hidden.chatId, id: op.hidden.messageId, reason: op.hidden.reason });
 				} else if (op.kind === "read" && op.read) {
 					// 這是「使用者在手機上讀了」的通知，只更新本機狀態，不會回寫 LINE。
 					this.#store.setReadState(op.read.chatId, op.read.messageId, op.read.at);
@@ -98,6 +105,13 @@ export class SyncEngine {
 			this.#store.setSyncState("talk_revision", next);
 			this.#store.setSyncState("last_poll_at", String(Date.now()));
 		});
+		if (hidden.length && this.onHidden) {
+			try {
+				this.onHidden(hidden);
+			} catch (e) {
+				console.error("onHidden hook failed:", (e as Error).message);
+			}
+		}
 		if (fresh.length && this.onNewMessages) {
 			try {
 				this.onNewMessages(fresh);

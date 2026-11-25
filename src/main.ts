@@ -24,6 +24,7 @@ import { MediaCache } from "./media/cache.ts";
 import { startMcpHttp } from "./mcp/server.ts";
 import { startControlHttp, type LoginState } from "./control/server.ts";
 import type { ToolContext } from "./mcp/tools.ts";
+import { EventLog } from "./storage/event-log.ts";
 import { AiPolicy } from "./ai/policy.ts";
 import { Audit } from "./ai/audit.ts";
 import { Outbox } from "./ai/outbox.ts";
@@ -88,8 +89,14 @@ scam.seedBuiltin();
 // AI 判讀（選用）：只有使用者開啟 scam_ai 且 App 內有 key 時
 scam.judge = (msgs) => ai.provider().chat(msgs, { maxTokens: 120 });
 const warner = new ScamWarner(store, outbox, audit, scam);
+// 反詐紀錄 / AI 代聊紀錄（人名與內容用資料金鑰加密）
+const events = new EventLog(store, dataKey.box);
+outbox.log = events;
+scam.log = events;
+warner.events = events;
+events.prune();
 
-const ctx: ToolContext = { store, whitelist, sync: null, media: new MediaCache(home, store, null), ai, scam };
+const ctx: ToolContext = { store, whitelist, sync: null, media: new MediaCache(home, store, null), ai, scam, warner, events };
 
 function attachSync(sync: SyncEngine): void {
 	sync.onNewMessages = (msgs) => {
@@ -97,6 +104,10 @@ function attachSync(sync: SyncEngine): void {
 		warner.handle(alerts);
 		ai.onNewMessages(msgs);
 		void outbox.processDue();
+	};
+	// 被隱藏 / 收回 / 刪除：安靜取消針對它的待送回覆與提醒（不寫紀錄）
+	sync.onHidden = (items) => {
+		for (const h of items) outbox.cancelForHidden(h.chatId, h.id);
 	};
 }
 
@@ -202,6 +213,7 @@ const control = await startControlHttp(
 		ai,
 		scam,
 		warner,
+		events,
 		setAiKey: (k) => void (aiKey = k ?? undefined),
 		mcpStats: () => mcpStats?.() ?? null,
 		rotateMcpToken: () => (mcpToken = genToken()),
@@ -228,6 +240,7 @@ setInterval(() => {
 	outbox.expireStale();
 	void outbox.processDue().catch((e) => console.error("processDue:", (e as Error).message));
 }, 5_000).unref?.();
+setInterval(() => events.prune(), 3_600_000).unref?.();
 
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e as Error)?.message ?? e));
 

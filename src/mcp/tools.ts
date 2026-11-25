@@ -11,6 +11,8 @@ import type { MediaCache } from "../media/cache.ts";
 import type { AiService } from "../ai/service.ts";
 import type { OutboxItem } from "../ai/outbox.ts";
 import type { ScamDetector, ScamLevel } from "../scam/detector.ts";
+import type { ScamWarner } from "../scam/warner.ts";
+import type { EventLog } from "../storage/event-log.ts";
 
 export interface ToolContext {
 	store: Store;
@@ -22,12 +24,16 @@ export interface ToolContext {
 	/** 進階工具（送訊息 / AI）；未設定時這些工具不註冊 */
 	ai?: AiService | null;
 	scam?: ScamDetector | null;
+	warner?: ScamWarner | null;
+	events?: EventLog | null;
 }
 
 /** 進階工具：會送出訊息或呼叫 AI。全部受「MCP 白名單 + AI 代聊白名單 + 模式 + kill switch + 上限」控制。 */
 export const SEND_TOOLS = ["send_message", "generate_and_send_image", "get_ai_suggestion", "get_outbox_item", "list_stickers"] as const;
-/** 反詐工具：只讀警示與範例（add_scam_sample 只能加 SCAM 範例） */
-export const SCAM_TOOLS = ["scan_scam_alerts", "list_scam_samples", "add_scam_sample"] as const;
+/** 確認佇列 / 信任狀態 / AI 紀錄。核准需 App 內開「允許 MCP 核准」；升級到 AUTO 需開「允許 MCP 升級」且 confirm_auto=true。降級永遠允許。 */
+export const REVIEW_TOOLS = ["list_pending", "edit_pending", "approve_pending", "reject_pending", "get_chat_trust", "set_chat_trust", "get_ai_log"] as const;
+/** 反詐工具（add_scam_sample 只能加 SCAM 範例） */
+export const SCAM_TOOLS = ["scan_scam_alerts", "list_scam_samples", "add_scam_sample", "compose_scam_warning", "mark_scam_false_positive", "trust_scam_member", "get_scam_log"] as const;
 
 export const BASIC_TOOLS = [
 	"list_allowed_chats",
@@ -39,7 +45,7 @@ export const BASIC_TOOLS = [
 	"get_sync_status",
 	"trigger_sync",
 ] as const;
-export type ToolName = (typeof BASIC_TOOLS)[number] | (typeof SEND_TOOLS)[number] | (typeof SCAM_TOOLS)[number];
+export type ToolName = (typeof BASIC_TOOLS)[number] | (typeof SEND_TOOLS)[number] | (typeof REVIEW_TOOLS)[number] | (typeof SCAM_TOOLS)[number];
 
 /** 接受 epoch ms 或 ISO 字串 */
 export function toMs(v: unknown): number | undefined {
@@ -60,7 +66,9 @@ function view(m: MessageRow) {
 		from_self: m.from_self === 1,
 		sent_at: new Date(m.sent_at).toISOString(),
 		type: m.content_type,
-		text: m.text,
+		// 被隱藏 / 收回的訊息不回傳內容，也不能回覆
+		text: m.hidden ? null : m.text,
+		hidden: m.hidden ? m.hidden : undefined,
 		media: m.content_type !== "NONE" ? { name: m.media_name, size: m.media_size } : undefined,
 		decrypt_state: m.decrypt_state === "plain" || m.decrypt_state === "decrypted" ? undefined : m.decrypt_state,
 	};
@@ -79,6 +87,15 @@ function outboxView(it: OutboxItem) {
 		sent_at: it.sent_at ? new Date(it.sent_at).toISOString() : null,
 		error: it.error,
 	};
+}
+
+/** 只能操作白名單會話裡的 pending 項目 */
+function pendingItem(ctx: ToolContext, id: unknown): OutboxItem {
+	const it = ctx.ai?.outbox.get(Number(id));
+	if (!it) throw new Error("outbox item not found");
+	ctx.whitelist.assert(it.chat_id);
+	if (it.status !== "pending") throw new Error(`item is ${it.status}, not pending`);
+	return it;
 }
 
 function need<T>(v: T | null | undefined, what: string): T {
@@ -170,6 +187,115 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 			const text = str(args.text, 500, "text").trim();
 			if (text.length < 6) throw new Error("text too short");
 			return sc.addSample({ label: "SCAM", category: str(args.category ?? "其他", 20, "category") || "其他", text }, "mcp");
+		}
+
+		// ---- 確認佇列 ----
+		case "list_pending": {
+			const ai = need(ctx.ai, "review tools");
+			if (args.chat_id !== undefined) whitelist.assert(String(args.chat_id));
+			const allowed = new Map(store.listChats({ allowedOnly: true }).map((c) => [c.id, c.name]));
+			return ai.outbox
+				.list({ status: "pending", limit: 100 })
+				.filter((it) => allowed.has(it.chat_id) && (args.chat_id === undefined || it.chat_id === String(args.chat_id)))
+				.map((it) => ({ ...outboxView(it), chat_name: allowed.get(it.chat_id) ?? null, origin: it.origin, flags: it.flags ? it.flags.split(",") : [], sticker: it.sticker_json ? JSON.parse(it.sticker_json) : null }));
+		}
+		case "edit_pending": {
+			const ai = need(ctx.ai, "review tools");
+			const it = pendingItem(ctx, args.id);
+			const st = args.sticker as { package_id?: unknown; sticker_id?: unknown } | undefined;
+			const out = ai.outbox.edit(it.id, { text: args.text === undefined ? undefined : str(args.text, 2000, "text"), sticker: st ? { package_id: String(st.package_id ?? ""), sticker_id: String(st.sticker_id ?? "") } : undefined }, "mcp");
+			return { ...outboxView(out), note: "已修改，仍在確認佇列" };
+		}
+		case "approve_pending": {
+			const ai = need(ctx.ai, "review tools");
+			if (store.getSetting("mcp_allow_approve") !== "on") throw new Error("mcp_approve_disabled: 使用者沒有開啟「允許 MCP 核准佇列」，請請使用者在 App 總控台核准");
+			const it = pendingItem(ctx, args.id);
+			return outboxView(ai.outbox.approve(it.id, args.text == null ? null : str(args.text, 2000, "text"), "mcp"));
+		}
+		case "reject_pending": {
+			const ai = need(ctx.ai, "review tools");
+			const it = pendingItem(ctx, args.id);
+			return outboxView(ai.outbox.reject(it.id, "mcp"));
+		}
+
+		// ---- 信任狀態 ----
+		case "get_chat_trust": {
+			const ai = need(ctx.ai, "review tools");
+			if (args.chat_id !== undefined) whitelist.assert(String(args.chat_id));
+			const chats = store.listChats({ allowedOnly: true }).filter((c) => args.chat_id === undefined || c.id === String(args.chat_id));
+			return {
+				mcp_can_promote: store.getSetting("mcp_allow_promote") === "on",
+				mcp_can_approve: store.getSetting("mcp_allow_approve") === "on",
+				kill_switch: ai.policy.killSwitch,
+				chats: chats.map((c) => ({ chat_id: c.id, name: c.name, ai: ai.policy.trust(c.id, "ai").toUpperCase(), scam: ai.policy.trust(c.id, "scam").toUpperCase(), ai_allowed: ai.policy.get(c.id).ai_allowed, scam_warn_enabled: ctx.warner?.get(c.id).enabled ?? false })),
+				recent_changes: ai.policy.trustLog(20).filter((r) => store.getChat(r.chat_id)?.allowed === 1),
+			};
+		}
+		case "set_chat_trust": {
+			const ai = need(ctx.ai, "review tools");
+			const chatId = String(args.chat_id ?? "");
+			whitelist.assert(chatId);
+			const feature = args.feature === "scam" ? "scam" : args.feature === "ai" ? "ai" : null;
+			if (!feature) throw new Error("feature must be ai or scam");
+			const state = String(args.state ?? "").toLowerCase();
+			if (state !== "review" && state !== "auto") throw new Error("state must be REVIEW or AUTO");
+			if (state === "auto") {
+				if (store.getSetting("mcp_allow_promote") !== "on") throw new Error("mcp_promote_disabled: 使用者沒有開啟「允許 MCP 升級到 AUTO」；降級永遠可以");
+				if (args.confirm_auto !== true) throw new Error("confirm_auto_required: 升級到 AUTO 需要 confirm_auto=true");
+			}
+			const st = ai.policy.setTrust(chatId, feature, state, "mcp", `${client ?? "mcp"}${args.reason ? ": " + str(args.reason, 60, "reason") : ""}`);
+			return { chat_id: chatId, feature, state: st.toUpperCase() };
+		}
+		case "get_ai_log": {
+			const ev = need(ctx.events, "logs");
+			if (args.chat_id !== undefined) whitelist.assert(String(args.chat_id));
+			return ev.aiList({ allowedOnly: true, chatId: args.chat_id === undefined ? undefined : String(args.chat_id), since: toMs(args.since), until: toMs(args.until), event: args.event == null ? undefined : String(args.event), limit: args.limit === undefined ? 100 : Math.min(500, Number(args.limit)) });
+		}
+
+		// ---- 反詐：自訂提醒 / 誤判 / 信任成員 / 紀錄 ----
+		case "compose_scam_warning": {
+			const w = need(ctx.warner, "anti-scam");
+			const chatId = String(args.chat_id ?? "");
+			whitelist.assert(chatId);
+			const it = w.compose(chatId, str(args.message_id, 64, "message_id"), args.text == null ? null : str(args.text, 300, "text"), "mcp");
+			return { ...outboxView(it), note: it.status === "pending" ? "已放進確認佇列（此群反詐提醒為 REVIEW）" : "已排程（此群反詐提醒為 AUTO）" };
+		}
+		case "mark_scam_false_positive": {
+			const sc = need(ctx.scam, "anti-scam");
+			const a = store.db.prepare("SELECT chat_id FROM scam_alert WHERE id = ?").get(Number(args.alert_id)) as { chat_id: string } | undefined;
+			if (!a) throw new Error("alert not found");
+			whitelist.assert(a.chat_id);
+			const r = sc.markFalsePositive(Number(args.alert_id), args.trust_member !== false);
+			let cancelled = 0;
+			if (ctx.ai) {
+				const rows = store.db.prepare("SELECT id FROM outbox WHERE origin='scam_warn' AND chat_id=? AND reply_to=? AND status IN ('pending','approved')").all(r.chat_id, r.message_id) as { id: number }[];
+				for (const x of rows) ctx.ai.outbox.reject(x.id, "mcp");
+				cancelled = rows.length;
+			}
+			ctx.events?.setScamAction({ alertId: Number(args.alert_id) }, "false_positive", r.trusted ? "member trusted" : null);
+			return { ...r, cancelled };
+		}
+		case "trust_scam_member": {
+			const sc = need(ctx.scam, "anti-scam");
+			const chatId = String(args.chat_id ?? "");
+			whitelist.assert(chatId);
+			const mid = str(args.member_id, 64, "member_id");
+			if (!mid) throw new Error("member_id is required");
+			sc.setAdmin(chatId, mid, args.remove === true ? { remove: true } : { mention: args.mention === true });
+			return { chat_id: chatId, trusted_members: sc.admins(chatId) };
+		}
+		case "get_scam_log": {
+			const ev = need(ctx.events, "logs");
+			if (args.chat_id !== undefined) whitelist.assert(String(args.chat_id));
+			return ev.scamList({
+				allowedOnly: true,
+				chatId: args.chat_id === undefined ? undefined : String(args.chat_id),
+				since: toMs(args.since),
+				until: toMs(args.until),
+				action: args.action == null ? undefined : String(args.action),
+				category: args.category == null ? undefined : String(args.category),
+				limit: args.limit === undefined ? 100 : Math.min(500, Number(args.limit)),
+			});
 		}
 
 		case "get_messages": {

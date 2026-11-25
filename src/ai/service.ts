@@ -157,7 +157,13 @@ export class AiService {
 
 	// ---- 產生 -------------------------------------------------------------
 	#history(chatId: string, n = 20): HistoryItem[] {
-		return this.store.getMessages(chatId, { limit: n }).reverse().map(toItem);
+		// 被隱藏 / 收回 / 刪除的訊息（「此訊息已被隱藏。」）不當 AI 脈絡
+		return this.store
+			.getMessages(chatId, { limit: n + 10 })
+			.filter((m) => !m.hidden)
+			.slice(0, n)
+			.reverse()
+			.map(toItem);
 	}
 
 	/**
@@ -175,6 +181,7 @@ export class AiService {
 		if (targetId) {
 			const t = this.store.getMessage(chatId, targetId);
 			if (!t) throw new Error("target message not found in this chat");
+			if (t.hidden) throw new Error("message_hidden: 這則訊息已被隱藏或收回，不能回覆");
 			target = toItem(t);
 		}
 		// 檢查「我最後一次發言之後」的對方訊息＋指定要回覆的那則
@@ -253,7 +260,14 @@ export class AiService {
 	/** SyncEngine 寫入新訊息後呼叫。只處理白名單 + mode suggest/auto 的會話。 */
 	onNewMessages(msgs: { chatId: string; id: string; fromSelf: boolean }[]): void {
 		const byChat = new Map<string, string>();
-		for (const m of msgs) if (!m.fromSelf) byChat.set(m.chatId, m.id);
+		for (const m of msgs) {
+			if (m.fromSelf) continue;
+			if (this.store.isHidden(m.chatId, m.id)) {
+				this.#skipHidden(m.chatId, m.id);
+				continue;
+			}
+			byChat.set(m.chatId, m.id);
+		}
 		if (this.driver !== "builtin") return;
 		for (const [chatId, lastId] of byChat) {
 			const b = this.policy.checkBasic(chatId, "text");
@@ -270,6 +284,9 @@ export class AiService {
 		}
 	}
 
+	/** 被隱藏 / 收回的訊息：安靜略過，不寫任何紀錄 */
+	#skipHidden(_chatId: string, _messageId: string): void {}
+
 	/** 對單一會話產生自動回覆 / 建議。回傳排入的項目或 null（被略過）。 */
 	async autoReply(chatId: string, triggerId: string | null): Promise<OutboxItem | null> {
 		if (this.#inflight.has(chatId)) return null;
@@ -283,8 +300,12 @@ export class AiService {
 				this.audit.log("auto", "skipped_outside_active_hours", { chatId });
 				return null;
 			}
-			const last = this.store.getMessages(chatId, { limit: 1 })[0];
-			if (!last || last.from_self === 1) return null; // 使用者已經回了
+			if (triggerId && this.store.isHidden(chatId, triggerId)) {
+				this.#skipHidden(chatId, triggerId);
+				return null;
+			}
+			const last = this.store.getMessages(chatId, { limit: 20 }).find((m) => !m.hidden);
+			if (!last || last.from_self === 1) return null; // 使用者已經回了（或只剩被隱藏的訊息）
 			const s = await this.suggest(chatId, "auto");
 			const origin = cfg.mode === "auto" ? "auto" : "suggest";
 			this.outbox.supersede(chatId, ["suggest", "auto"]);

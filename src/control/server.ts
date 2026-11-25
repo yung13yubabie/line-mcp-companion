@@ -17,6 +17,8 @@ import { ChatNotAllowedError } from "../whitelist.ts";
 import { moduleInfo } from "../style/registry.ts";
 import { CATEGORY_TIPS } from "../scam/rules.ts";
 import type { McpStats } from "../mcp/server.ts";
+import { toCsv, SCAM_CSV_COLS, AI_CSV_COLS, type EventLog } from "../storage/event-log.ts";
+import type { TrustFeature, TrustState } from "../ai/policy.ts";
 
 export interface LoginState {
 	phase: "logged_out" | "waiting_qr_scan" | "waiting_pin" | "online" | "error";
@@ -36,6 +38,7 @@ export interface ControlDeps {
 	ai?: AiService | null;
 	scam?: ScamDetector | null;
 	warner?: ScamWarner | null;
+	events?: EventLog | null;
 	/** 設定 / 清除記憶體中的 API key（Kotlin 端負責加密保存） */
 	setAiKey?: (key: string | null) => void;
 	mcpStats?: () => McpStats | null;
@@ -94,6 +97,15 @@ function preview(m: { text: string | null; content_type: string; media_name?: st
 	return `[${m.content_type}]`;
 }
 
+/** 取消針對某則訊息、尚未送出的反詐提醒（誤判時） */
+export function cancelWarnings(ai: AiService, chatId: string, messageId: string, actor: "ui" | "mcp"): number {
+	const rows = ai.outbox.store.db
+		.prepare("SELECT id FROM outbox WHERE origin='scam_warn' AND chat_id=? AND reply_to=? AND status IN ('pending','approved')")
+		.all(chatId, messageId) as { id: number }[];
+	for (const r of rows) ai.outbox.reject(r.id, actor);
+	return rows.length;
+}
+
 export async function startControlHttp(deps: ControlDeps, opts: { port?: number; token: string }): Promise<{ server: Server; url: string }> {
 	if (!opts.token || opts.token.length < 16) throw new Error("control token is required (>= 16 chars)");
 	const { store } = deps;
@@ -103,7 +115,18 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 		return d.getTime();
 	};
 
-	const chatAiView = (cfg: ChatAiConfig) => ({ ...cfg, warn: deps.warner?.get(cfg.chat_id) ?? null, admins: deps.scam?.admins(cfg.chat_id) ?? [] });
+	const chatAiView = (cfg: ChatAiConfig) => ({
+		...cfg,
+		warn: deps.warner?.get(cfg.chat_id) ?? null,
+		admins: deps.scam?.admins(cfg.chat_id) ?? [],
+		trust: { ai: cfg.ai_trust, scam: deps.ai?.policy.trust(cfg.chat_id, "scam") ?? "review" },
+		trust_log: deps.ai?.policy.trustLog(10, cfg.chat_id) ?? [],
+	});
+	const logFilter = (url: URL) => {
+		const q = url.searchParams;
+		const n = (k: string) => (q.get(k) ? Number(q.get(k)) : undefined);
+		return { chatId: q.get("chat_id") || undefined, since: n("since"), until: n("until"), limit: n("limit") ?? 300 };
+	};
 
 	function dashboard() {
 		const ai = deps.ai;
@@ -127,7 +150,15 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 						scheduled: ai.outbox.list({ status: "approved", limit: 50 }).length,
 					}
 				: null,
-			chats: ai ? ai.policy.overview().filter((c) => c.allowed).map((c) => ({ ...c, warn_enabled: deps.warner?.get(c.chat_id).enabled ?? false })) : [],
+			chats: ai
+				? ai.policy
+						.overview()
+						.filter((c) => c.allowed)
+						.map((c) => ({ ...c, warn_enabled: deps.warner?.get(c.chat_id).enabled ?? false, scam_trust: ai.policy.trust(c.chat_id, "scam") }))
+				: [],
+			trust_log: ai?.policy.trustLog(20) ?? [],
+			mcp_allow_promote: store.getSetting("mcp_allow_promote") === "on",
+			mcp_allow_approve: store.getSetting("mcp_allow_approve") === "on",
 			mcp: deps.mcpStats?.() ?? null,
 			scam: deps.scam ? { enabled: deps.scam.enabled, ai: deps.scam.aiEnabled, today: deps.scam.counts(sod), recent: deps.scam.alerts({ limit: 5 }), warnings: deps.warner?.log(10) ?? [] } : null,
 			audit: ai?.audit.recent({ limit: 30 }) ?? [],
@@ -243,6 +274,73 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const b = await body(req);
 			return need(deps.ai, "AI").outbox.approve(Number(b.id), b.text == null ? null : String(b.text));
 		},
+		"POST /control/queue/edit": async (_u, req) => {
+			const b = await body(req);
+			const st = b.sticker as { package_id?: unknown; sticker_id?: unknown } | null | undefined;
+			return need(deps.ai, "AI").outbox.edit(
+				Number(b.id),
+				{
+					text: b.text === undefined ? undefined : b.text == null ? null : String(b.text),
+					sticker: st === undefined ? undefined : st === null ? null : { package_id: String(st.package_id ?? ""), sticker_id: String(st.sticker_id ?? "") },
+				},
+				"ui",
+			);
+		},
+
+		// ---- 信任狀態（review ⇄ auto）----
+		"POST /control/trust": async (_u, req) => {
+			const ai = need(deps.ai, "AI");
+			const b = await body(req);
+			const st = ai.policy.setTrust(String(b.chat_id ?? ""), String(b.feature) as TrustFeature, String(b.state) as TrustState, "ui", b.reason == null ? "manual" : String(b.reason));
+			return { chat_id: b.chat_id, feature: b.feature, state: st };
+		},
+		"POST /control/trust/demote_all": async () => ({ demoted: need(deps.ai, "AI").policy.demoteAll("ui", "manual_all") }),
+		"GET /control/trust/log": (url) => need(deps.ai, "AI").policy.trustLog(Number(url.searchParams.get("limit") ?? 100), url.searchParams.get("chat_id") || undefined),
+		"POST /control/mcp/permissions": async (_u, req) => {
+			const b = await body(req);
+			for (const k of ["mcp_allow_promote", "mcp_allow_approve"] as const) {
+				if (b[k] !== undefined) {
+					store.setSetting(k, b[k] === true ? "on" : "off");
+					deps.ai?.audit.log("ui", `${k}_${b[k] === true ? "on" : "off"}`);
+				}
+			}
+			return { mcp_allow_promote: store.getSetting("mcp_allow_promote") === "on", mcp_allow_approve: store.getSetting("mcp_allow_approve") === "on" };
+		},
+
+		// ---- 紀錄（加密保存；可篩選 / 匯出 CSV / 清除）----
+		"GET /control/logs/scam": (url, _r, res) => {
+			const ev = need(deps.events, "logs");
+			const rows = ev.scamList({ ...logFilter(url), action: url.searchParams.get("action") || undefined, category: url.searchParams.get("category") || undefined });
+			if (url.searchParams.get("format") === "csv") {
+				deps.ai?.audit.log("ui", "scam_log_exported", { detail: { rows: rows.length } });
+				res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" }).end(toCsv(rows as never, SCAM_CSV_COLS));
+				return undefined;
+			}
+			return rows;
+		},
+		"GET /control/logs/ai": (url, _r, res) => {
+			const ev = need(deps.events, "logs");
+			const rows = ev.aiList({ ...logFilter(url), event: url.searchParams.get("event") || undefined });
+			if (url.searchParams.get("format") === "csv") {
+				deps.ai?.audit.log("ui", "ai_log_exported", { detail: { rows: rows.length } });
+				res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" }).end(toCsv(rows as never, AI_CSV_COLS));
+				return undefined;
+			}
+			return rows;
+		},
+		"GET /control/logs/settings": () => ({ retention_days: need(deps.events, "logs").retentionDays }),
+		"POST /control/logs/settings": async (_u, req) => {
+			const b = await body(req);
+			return { retention_days: need(deps.events, "logs").setRetentionDays(Number(b.retention_days)) };
+		},
+		"POST /control/logs/clear": async (_u, req) => {
+			const b = await body(req);
+			const kind = b.kind === "scam" || b.kind === "ai" ? b.kind : "all";
+			const n = need(deps.events, "logs").clear(kind);
+			deps.ai?.audit.log("ui", "logs_cleared", { detail: { kind, rows: n } });
+			return { cleared: n };
+		},
+
 		"POST /control/queue/reject": async (_u, req) => {
 			const b = await body(req);
 			return need(deps.ai, "AI").outbox.reject(Number(b.id), "ui");
@@ -305,6 +403,18 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const b = await body(req);
 			const s = b.status === "dismissed" ? "dismissed" : b.status === "new" ? "new" : "seen";
 			return { ok: need(deps.scam, "anti-scam").setStatus(Number(b.id), s) };
+		},
+		"POST /control/scam/false_positive": async (_u, req) => {
+			const b = await body(req);
+			const r = need(deps.scam, "anti-scam").markFalsePositive(Number(b.id), b.trust_member !== false);
+			const cancelled = deps.ai ? cancelWarnings(deps.ai, r.chat_id, r.message_id, "ui") : 0;
+			deps.events?.setScamAction({ alertId: Number(b.id) }, "false_positive", r.trusted ? "member trusted" : null);
+			deps.ai?.audit.log("ui", "scam_false_positive", { chatId: r.chat_id, detail: { alert: Number(b.id), trusted: r.trusted, cancelled } });
+			return { ...r, cancelled };
+		},
+		"POST /control/scam/compose": async (_u, req) => {
+			const b = await body(req);
+			return need(deps.warner, "anti-scam").compose(String(b.chat_id ?? ""), String(b.message_id ?? ""), b.text == null ? null : String(b.text), "ui");
 		},
 		"GET /control/scam/samples": (url) => need(deps.scam, "anti-scam").samples({ label: (url.searchParams.get("label") as "SCAM" | "OK" | null) ?? undefined, limit: 500 }),
 		"POST /control/scam/samples": async (_u, req) => {

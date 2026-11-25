@@ -1,5 +1,7 @@
 import type { ChatType } from "../storage/db.ts";
 
+export type HiddenReason = "unsent" | "deleted" | "forbidden" | "hidden_text";
+
 export interface SourceChat {
 	id: string;
 	type: ChatType;
@@ -24,7 +26,9 @@ export interface SourceMessage {
 
 export interface SourceOp {
 	revision: string;
-	kind: "message" | "read" | "chat_update" | "other";
+	kind: "message" | "read" | "chat_update" | "hidden" | "other";
+	/** kind=hidden：訊息被收回 / 刪除 / 隱藏（talk: (NOTIFIED_)DESTROY_MESSAGE；square: NOTIFIED_DESTROY_MESSAGE、state DELETED/FORBIDDEN/UNSENT） */
+	hidden?: { chatId: string; messageId: string; reason: HiddenReason };
 	message?: SourceMessage;
 	/** kind=read：本帳號在其他裝置把此會話讀到哪（NOTIFIED_READ_MESSAGE 自己的部分） */
 	read?: { chatId: string; messageId: string; at: number };

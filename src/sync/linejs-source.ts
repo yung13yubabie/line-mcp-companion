@@ -62,6 +62,9 @@ export class LinejsSource implements LineSource {
 			next = String(op.revision);
 			if ((op.type === "RECEIVE_MESSAGE" || op.type === "SEND_MESSAGE") && op.message) {
 				ops.push({ revision: next, kind: "message", message: await this.#normalize(op.message, me) });
+			} else if ((op.type === "NOTIFIED_DESTROY_MESSAGE" || op.type === "DESTROY_MESSAGE") && op.param1 && op.param2) {
+				// param1 = chat, param2 = messageId（對方 / 自己收回訊息）
+				ops.push({ revision: next, kind: "hidden", hidden: { chatId: String(op.param1), messageId: String(op.param2), reason: "unsent" } });
 			} else if (op.type === "NOTIFIED_READ_MESSAGE" && op.param2 === me) {
 				// param1 = chat, param2 = 讀者, param3 = messageId（自己在其他裝置讀了）
 				ops.push({ revision: next, kind: "read", read: { chatId: op.param1, messageId: String(op.param3), at: Number(op.createdTime) } });

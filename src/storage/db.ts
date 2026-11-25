@@ -28,6 +28,7 @@ export interface MessageInput {
 	mediaSize?: number | null;
 	decryptState?: string;
 	meta?: Record<string, unknown> | null;
+	hidden?: string | null;
 }
 
 export interface MessageRow {
@@ -42,6 +43,16 @@ export interface MessageRow {
 	media_name: string | null;
 	media_size: number | null;
 	decrypt_state: string;
+	/** NULL = 正常；其他 = 已被隱藏 / 收回 / 刪除 */
+	hidden?: string | null;
+}
+
+/** LINE 顯示被隱藏訊息時的固定字樣（社群管理員隱藏、被檢舉、刪除、收回） */
+export const HIDDEN_TEXTS = ["此訊息已被隱藏。", "此訊息已被隱藏", "此訊息已被收回。", "這則訊息已被隱藏。", "This message has been hidden.", "This message was unsent."];
+export function isHiddenText(t: string | null | undefined): boolean {
+	if (!t) return false;
+	const s = t.normalize("NFKC").trim();
+	return HIDDEN_TEXTS.some((h) => s === h.normalize("NFKC"));
 }
 
 /** 開啟（或建立）資料庫並套用 schema。path 可為 ":memory:"。 */
@@ -52,6 +63,16 @@ export function openDatabase(path: string): Store {
 	const db = new DatabaseSync(path);
 	db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;");
 	db.exec(SCHEMA_SQL);
+	// 舊版資料庫補欄位（CREATE TABLE IF NOT EXISTS 不會改既有表）
+	for (const [table, col, ddl] of [
+		["outbox", "mentions_json", "TEXT"],
+		["message", "hidden", "TEXT"],
+		["scam_alert", "category", "TEXT"],
+		["scam_warn", "trust", "TEXT NOT NULL DEFAULT 'review'"],
+	] as const) {
+		const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+		if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+	}
 	db.prepare("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
 	if (path !== ":memory:") {
 		try {
@@ -141,8 +162,8 @@ export class Store {
 	insertMessage(m: MessageInput): boolean {
 		const r = this.db
 			.prepare(
-				`INSERT OR IGNORE INTO message(chat_id, id, sender_mid, from_self, sent_at, content_type, text, media_name, media_size, decrypt_state, meta_json)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT OR IGNORE INTO message(chat_id, id, sender_mid, from_self, sent_at, content_type, text, media_name, media_size, decrypt_state, meta_json, hidden)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				m.chatId,
@@ -156,12 +177,22 @@ export class Store {
 				m.mediaSize ?? null,
 				m.decryptState ?? "plain",
 				m.meta ? JSON.stringify(m.meta) : null,
+				m.hidden ?? (isHiddenText(m.text) ? "hidden_text" : null),
 			);
 		const inserted = Number(r.changes) > 0;
 		if (inserted) {
 			this.db.prepare("UPDATE chat SET last_message_at = MAX(COALESCE(last_message_at, 0), ?) WHERE id = ?").run(m.sentAt, m.chatId);
 		}
 		return inserted;
+	}
+
+	/** 標記被隱藏 / 收回 / 刪除；回傳 true = 這則原本是正常訊息（狀態有變） */
+	markHidden(chatId: string, id: string, reason: string): boolean {
+		return Number(this.db.prepare("UPDATE message SET hidden = ? WHERE chat_id = ? AND id = ? AND hidden IS NULL").run(String(reason).slice(0, 20), chatId, id).changes) > 0;
+	}
+	isHidden(chatId: string, id: string): boolean {
+		const r = this.db.prepare("SELECT hidden FROM message WHERE chat_id = ? AND id = ?").get(chatId, id) as { hidden: string | null } | undefined;
+		return !!r?.hidden;
 	}
 
 	getMessage(chatId: string, id: string): (MessageRow & { meta_json: string | null }) | undefined {
@@ -180,7 +211,7 @@ export class Store {
 		return this.db
 			.prepare(
 				`SELECT m.chat_id, m.id, m.sender_mid, p.display_name AS sender_name, m.from_self, m.sent_at,
-				        m.content_type, m.text, m.media_name, m.media_size, m.decrypt_state
+				        m.content_type, m.text, m.media_name, m.media_size, m.decrypt_state, m.hidden
 				 FROM message m LEFT JOIN participant p ON p.mid = m.sender_mid
 				 WHERE m.chat_id = ? AND m.sent_at < ? AND m.sent_at > ?
 				 ORDER BY m.sent_at DESC, m.id DESC LIMIT ?`,

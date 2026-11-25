@@ -14,6 +14,7 @@ import type { Outbox, OutboxItem } from "../ai/outbox.ts";
 import type { Audit } from "../ai/audit.ts";
 import type { ScamDetector } from "./detector.ts";
 import { CATEGORY_TIPS } from "./rules.ts";
+import type { EventLog } from "../storage/event-log.ts";
 
 export interface WarnConfig {
 	chat_id: string;
@@ -72,6 +73,27 @@ export function stripMentions(text: string, mentions: Mention[] = []): string {
 }
 
 /**
+ * 自訂提醒文字（使用者 / 連接器 / AI 寫的）。範本與範例只是參考，文字可以自由寫，但：
+ *   - 套 scrubNotice（LINE 禁字替換）
+ *   - 不可含任何連結 / 網域 / LINE 加好友連結
+ *   - 不可引用詐騙訊息內容（與原訊息有連續 10 字以上相同就拒絕）
+ * 回傳處理後的文字；不合格丟錯。可含 {category} {tip} {admins} {sender} 佔位字。
+ */
+export function checkCustomWarning(text: string, scamText: string | null | undefined): string {
+	const t = String(text ?? "").normalize("NFC").trim();
+	if (!t) throw new Error("warning text is required");
+	if ([...t].length > 300) throw new Error("warning text too long (max 300)");
+	if (/(https?:\/\/|www\.|line\.me|lin\.ee|\b[a-z0-9-]+\.[a-z]{2,}\b)/i.test(t)) throw new Error("warning_contains_link: 提醒文字不能有連結或網址");
+	if (/(line|賴)\s*id\s*[:：]?\s*@?[a-z0-9._-]{3,}|@[a-z0-9._-]*\d[a-z0-9._-]{3,}/i.test(t.replace(/\{[a-z]+\}/g, ""))) throw new Error("warning_contains_contact: 提醒文字不能有 LINE ID");
+	const norm = (s: string) => s.normalize("NFKC").replace(/[\s\u3000，。！？、,.!?:：;；「」『』"'（）()]/g, "").toLowerCase();
+	const a = norm(scamText ?? "");
+	const b = norm(t);
+	const W = 10;
+	for (let i = 0; i + W <= a.length && i < 2000; i++) if (b.includes(a.slice(i, i + W))) throw new Error("warning_quotes_scam: 提醒文字不能引用詐騙內容");
+	return scrubNotice(t);
+}
+
+/**
  * 套範本。{category} {tip} {sender} 直接替換；{admins} 展開成「@名字 @名字」並回傳 mention 位置。
  * 沒有要 @ 的人時，整句含 {admins} 的句子拿掉。絕不放入詐騙訊息內容。
  */
@@ -112,6 +134,7 @@ export class ScamWarner {
 	#outbox: Outbox;
 	#audit: Audit;
 	#detector: ScamDetector;
+	events: EventLog | null = null;
 
 	constructor(store: Store, outbox: Outbox, audit: Audit, detector: ScamDetector) {
 		this.#store = store;
@@ -188,7 +211,11 @@ export class ScamWarner {
 		if (!a) return { skipped: "no_alert" };
 		const c = this.get(a.chat_id);
 		const skip = (why: string) => {
-			if (c.enabled) this.#audit.log("system", "scam_warning_skipped", { chatId: a.chat_id, detail: { alert: alertId, reason: why } });
+			if (c.enabled) {
+				this.#audit.log("system", "scam_warning_skipped", { chatId: a.chat_id, detail: { alert: alertId, reason: why } });
+				const act = (["cooldown", "daily_cap", "below_min_level", "already_warned"] as const).find((x) => x === why);
+				this.events?.setScamAction({ alertId }, act ?? "error", act ? null : why);
+			}
 			return { skipped: why };
 		};
 		if (!c.enabled) return { skipped: "disabled" };
@@ -201,7 +228,7 @@ export class ScamWarner {
 		const dupe = this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND reply_to=?").get(a.chat_id, a.message_id) as { n: number };
 		if (Number(dupe.n) > 0) return skip("already_warned");
 		const recent = this.#store.db
-			.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND origin_detail=? AND status IN ('approved','sent') AND created_at >= ?")
+			.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND origin_detail=? AND status IN ('pending','approved','sent') AND created_at >= ?")
 			.get(a.chat_id, detail, this.#outbox.policy.clock.now() - c.cooldown_min * 60_000) as { n: number };
 		if (Number(recent.n) > 0) return skip("cooldown");
 		const today = Number((this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND status IN ('approved','sent') AND created_at >= ?").get(a.chat_id, this.#sod()) as { n: number }).n);
@@ -210,10 +237,48 @@ export class ScamWarner {
 		const admins = c.mention_admins ? this.#detector.admins(a.chat_id).filter((x) => x.mention && x.mid !== sender) : [];
 		const { text, mentions } = renderNotice(c.template ?? this.template(), { category, tip: CATEGORY_TIPS[category] ?? CATEGORY_TIPS["可疑連結"]!, sender: m.sender_name }, admins);
 		try {
-			return { item: this.#outbox.enqueueWarning(a.chat_id, text, a.message_id, detail, mentions) };
+			const item = this.#outbox.enqueueWarning(a.chat_id, text, a.message_id, detail, mentions);
+			this.events?.setScamAction({ alertId }, item.status === "pending" ? "queued" : "scheduled", null, item.id);
+			return { item };
 		} catch (e) {
 			return skip((e as Error).message);
 		}
+	}
+
+	/**
+	 * 自訂提醒（使用者在 App、或連接器經 MCP 寫的）。範本 / 範例只是參考：
+	 * text 可自由寫（null = 用該群範本），會過 checkCustomWarning（禁字、無連結、不引用詐騙內容），
+	 * 一樣依信任狀態（review → 確認佇列；auto → 直接排程），受緊急停止、白名單、每日上限、同則只提醒一次限制。
+	 */
+	compose(chatId: string, messageId: string, text: string | null, actor: "ui" | "mcp"): OutboxItem {
+		const chat = this.#store.getChat(chatId);
+		if (!chat || chat.allowed !== 1) throw new Error("chat not found or not allowed for MCP access");
+		const c = this.get(chatId);
+		if (!c.enabled) throw new Error("scam_warn_disabled: 這個群組沒有開啟反詐提醒");
+		const m = this.#store.getMessage(chatId, messageId);
+		if (!m || m.from_self === 1) throw new Error("message not found in this chat");
+		if (m.hidden) throw new Error("message_hidden: 這則訊息已被隱藏或收回");
+		const dupe = this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND reply_to=? AND status IN ('pending','approved','sent')").get(chatId, messageId) as { n: number };
+		if (Number(dupe.n) > 0) throw new Error("already_warned: 這則已經提醒過或在佇列中");
+		const today = Number((this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND status IN ('approved','sent') AND created_at >= ?").get(chatId, this.#sod()) as { n: number }).n);
+		if (today >= c.daily_cap) throw new Error("scam_warn_daily_cap");
+		const alert = this.#store.db.prepare("SELECT id, category FROM scam_alert WHERE chat_id = ? AND message_id = ?").get(chatId, messageId) as { id: number; category: string | null } | undefined;
+		const category = alert?.category ?? "可疑訊息";
+		const sender = m.sender_mid ?? "?";
+		const tpl = text == null || !String(text).trim() ? (c.template ?? this.template()) : checkCustomWarning(String(text), m.text);
+		const admins = c.mention_admins ? this.#detector.admins(chatId).filter((x) => x.mention && x.mid !== sender) : [];
+		const r = renderNotice(tpl, { category, tip: CATEGORY_TIPS[category] ?? CATEGORY_TIPS["可疑連結"]!, sender: m.sender_name }, admins);
+		// 佔位字展開後再檢查一次（tip / 暱稱不會含連結，但保險）
+		const finalText = checkCustomWarning(r.text, m.text);
+		const item = this.#outbox.enqueueWarning(chatId, finalText, messageId, `${category}:${sender}`.slice(0, 60), finalText === r.text ? r.mentions : [], actor);
+		if (this.events) {
+			if (alert) this.events.setScamAction({ alertId: alert.id }, item.status === "pending" ? "queued" : "scheduled", "custom", item.id);
+			else {
+				const id = this.events.scam({ chat_id: chatId, message_id: messageId, sender_mid: m.sender_mid, sender_name: m.sender_name, text: m.text, category, action: item.status === "pending" ? "queued" : "scheduled", detail: `custom by ${actor}` });
+				this.#store.db.prepare("UPDATE scam_log SET outbox_id = ? WHERE id = ?").run(item.id, id);
+			}
+		}
+		return item;
 	}
 
 	handle(alertIds: number[]): void {

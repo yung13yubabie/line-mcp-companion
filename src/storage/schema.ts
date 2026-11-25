@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS message (
   media_size    INTEGER,
   decrypt_state TEXT NOT NULL DEFAULT 'plain',-- plain | decrypted | missing_key | invalid
   meta_json     TEXT,                         -- contentMetadata（不含 chunks）
+  hidden        TEXT,                         -- NULL | unsent | deleted | forbidden | hidden_text（被隱藏 / 收回 / 刪除：不回覆、不當 AI 脈絡）
   PRIMARY KEY (chat_id, id)
 );
 CREATE INDEX IF NOT EXISTS message_by_time ON message(chat_id, sent_at);
@@ -171,8 +172,22 @@ CREATE TABLE IF NOT EXISTS scam_warn (
   daily_cap    INTEGER NOT NULL DEFAULT 10,
   mention_admins INTEGER NOT NULL DEFAULT 1,    -- 提醒時 @ 這群的管理員
   template     TEXT,                            -- NULL = 用全域範本
+  trust        TEXT    NOT NULL DEFAULT 'review', -- review = 先進確認佇列；auto = 直接送
   updated_at   INTEGER NOT NULL
 );
+
+-- 信任狀態變更紀錄（review ⇄ auto；ai 與 scam 分開）
+CREATE TABLE IF NOT EXISTS trust_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts         INTEGER NOT NULL,
+  chat_id    TEXT    NOT NULL,
+  feature    TEXT    NOT NULL,   -- ai | scam
+  from_state TEXT    NOT NULL,
+  to_state   TEXT    NOT NULL,
+  actor      TEXT    NOT NULL,   -- ui | mcp | system
+  reason     TEXT
+);
+CREATE INDEX IF NOT EXISTS trust_log_chat ON trust_log(chat_id, id);
 
 -- 每群組的管理員／信任成員：不掃描他們的訊息；mention=1 的人會在提醒裡被 @（最多 3 位）
 CREATE TABLE IF NOT EXISTS scam_admin (
@@ -193,4 +208,43 @@ CREATE TABLE IF NOT EXISTS social_draft (
   warnings    TEXT,
   created_at  INTEGER NOT NULL
 );
+
+-- 反詐紀錄（sender_name / text 以資料金鑰 AES-GCM 加密）
+CREATE TABLE IF NOT EXISTS scam_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts          INTEGER NOT NULL,
+  chat_id     TEXT    NOT NULL,
+  message_id  TEXT    NOT NULL,
+  sender_mid  TEXT,
+  sender_name TEXT,
+  text        TEXT,
+  level       TEXT,
+  score       INTEGER,
+  category    TEXT,
+  rules       TEXT,
+  action      TEXT    NOT NULL,
+  detail      TEXT,
+  alert_id    INTEGER,
+  outbox_id   INTEGER
+);
+CREATE INDEX IF NOT EXISTS scam_log_ts ON scam_log(ts);
+CREATE INDEX IF NOT EXISTS scam_log_alert ON scam_log(alert_id);
+CREATE INDEX IF NOT EXISTS scam_log_outbox ON scam_log(outbox_id);
+
+-- AI 代聊紀錄（trigger_sender / trigger_text / text 加密）
+CREATE TABLE IF NOT EXISTS ai_log (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts             INTEGER NOT NULL,
+  chat_id        TEXT    NOT NULL,
+  outbox_id      INTEGER,
+  origin         TEXT    NOT NULL,
+  event          TEXT    NOT NULL,
+  actor          TEXT    NOT NULL,
+  trigger_msg_id TEXT,
+  trigger_sender TEXT,
+  trigger_text   TEXT,
+  text           TEXT,
+  detail         TEXT
+);
+CREATE INDEX IF NOT EXISTS ai_log_ts ON ai_log(ts);
 `;

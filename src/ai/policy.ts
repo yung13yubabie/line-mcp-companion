@@ -21,7 +21,10 @@ export interface ChatAiConfig {
 	/** 去 AI 味（Lieflat Less AI Tone 規則）檢查 / 改寫 */
 	style_lieflat: boolean;
 	allow_image: boolean;
+	/** = (ai_trust === "review")；只能用 setTrust() 改，會寫入 trust_log */
 	confirm_send: boolean;
+	/** 信任狀態：review（每則都進確認佇列，預設）→ auto（直接送，上限 / 冷卻 / 緊急停止仍有效） */
+	ai_trust: TrustState;
 	min_interval_sec: number;
 	delay_sec: number;
 	max_per_hour: number;
@@ -30,12 +33,26 @@ export interface ChatAiConfig {
 	active_end: number | null;
 }
 
+export type TrustFeature = "ai" | "scam";
+export type TrustState = "review" | "auto";
+export interface TrustChange {
+	id: number;
+	ts: number;
+	chat_id: string;
+	feature: TrustFeature;
+	from_state: TrustState;
+	to_state: TrustState;
+	actor: string;
+	reason: string | null;
+}
+
 export const DEFAULT_CHAT_AI: Omit<ChatAiConfig, "chat_id"> = {
 	ai_allowed: false,
 	mode: "off",
 	style_lieflat: true,
 	allow_image: false,
 	confirm_send: true,
+	ai_trust: "review",
 	min_interval_sec: 300,
 	delay_sec: 30,
 	max_per_hour: 4,
@@ -140,6 +157,7 @@ export class AiPolicy {
 			mode: (["off", "suggest", "auto"].includes(String(r.mode)) ? r.mode : "off") as AiMode,
 			allow_image: r.allow_image === 1,
 			confirm_send: r.confirm_send !== 0,
+			ai_trust: r.confirm_send !== 0 ? "review" : "auto",
 			min_interval_sec: Number(r.min_interval_sec),
 			delay_sec: Number(r.delay_sec),
 			max_per_hour: Number(r.max_per_hour),
@@ -153,7 +171,11 @@ export class AiPolicy {
 	set(chatId: string, patch: Partial<Omit<ChatAiConfig, "chat_id">>): ChatAiConfig {
 		const chat = this.store.getChat(chatId);
 		if (!chat || chat.allowed !== 1) throw new ChatNotAllowedError();
-		const c = { ...this.get(chatId), ...patch };
+		const prev = this.get(chatId);
+		// 信任狀態只能透過 setTrust() 改（才會留下紀錄）；移出 AI 代聊名單時自動降回 review
+		const c = { ...prev, ...patch, confirm_send: prev.confirm_send };
+		const demote = !prev.confirm_send && !c.ai_allowed;
+		if (demote) c.confirm_send = true;
 		const mode: AiMode = ["off", "suggest", "auto"].includes(c.mode) ? c.mode : "off";
 		const minute = (v: unknown) => (v === null || v === undefined || v === "" ? null : int(v, 0, 1439, 0));
 		this.store.db
@@ -179,7 +201,71 @@ export class AiPolicy {
 				minute(c.active_end),
 				this.clock.now(),
 			);
+		if (demote) this.#logTrust(chatId, "ai", "auto", "review", "system", "removed_from_ai_whitelist");
 		return this.get(chatId);
+	}
+
+	// ---- 信任狀態（每會話、每功能分開：ai = AI 代聊回覆，scam = 反詐提醒） ----
+	trust(chatId: string, feature: TrustFeature): TrustState {
+		if (feature === "ai") return this.get(chatId).ai_trust;
+		const r = this.store.db.prepare("SELECT trust FROM scam_warn WHERE chat_id = ?").get(chatId) as { trust: string } | undefined;
+		return r?.trust === "auto" ? "auto" : "review";
+	}
+
+	/**
+	 * 升級到 auto / 降回 review。升級條件：緊急停止關閉、會話在 MCP 白名單；AI 另需在 AI 代聊名單。
+	 * 降級永遠允許。每次變更寫入 trust_log 與稽核紀錄。
+	 */
+	setTrust(chatId: string, feature: TrustFeature, state: TrustState, actor: string = "ui", reason: string | null = null): TrustState {
+		if (feature !== "ai" && feature !== "scam") throw new Error("feature must be ai or scam");
+		if (state !== "review" && state !== "auto") throw new Error("state must be review or auto");
+		const chat = this.store.getChat(chatId);
+		if (!chat || chat.allowed !== 1) throw new ChatNotAllowedError();
+		const prev = this.trust(chatId, feature);
+		if (prev === state) return prev;
+		if (state === "auto") {
+			if (this.killSwitch) throw denyError("kill_switch");
+			if (feature === "ai" && !this.get(chatId).ai_allowed) throw denyError("ai_not_allowed");
+		}
+		const now = this.clock.now();
+		if (feature === "ai") {
+			if (!this.store.db.prepare("SELECT 1 FROM chat_ai WHERE chat_id = ?").get(chatId)) this.set(chatId, {});
+			this.store.db.prepare("UPDATE chat_ai SET confirm_send = ?, updated_at = ? WHERE chat_id = ?").run(state === "review" ? 1 : 0, now, chatId);
+		} else {
+			this.store.db
+				.prepare("INSERT INTO scam_warn(chat_id, trust, updated_at) VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET trust = excluded.trust, updated_at = excluded.updated_at")
+				.run(chatId, state, now);
+		}
+		this.#logTrust(chatId, feature, prev, state, actor, reason);
+		return state;
+	}
+
+	/** 全部降回 review（緊急停止時自動呼叫）。回傳降級數量。 */
+	demoteAll(actor: string, reason: string): number {
+		const ai = this.store.db.prepare("SELECT chat_id FROM chat_ai WHERE confirm_send = 0").all() as { chat_id: string }[];
+		const sc = this.store.db.prepare("SELECT chat_id FROM scam_warn WHERE trust = 'auto'").all() as { chat_id: string }[];
+		const now = this.clock.now();
+		this.store.db.prepare("UPDATE chat_ai SET confirm_send = 1, updated_at = ? WHERE confirm_send = 0").run(now);
+		this.store.db.prepare("UPDATE scam_warn SET trust = 'review', updated_at = ? WHERE trust = 'auto'").run(now);
+		for (const r of ai) this.#logTrust(r.chat_id, "ai", "auto", "review", actor, reason);
+		for (const r of sc) this.#logTrust(r.chat_id, "scam", "auto", "review", actor, reason);
+		return ai.length + sc.length;
+	}
+
+	trustLog(limit = 50, chatId?: string): TrustChange[] {
+		const n = int(limit, 1, 500, 50);
+		return (chatId
+			? this.store.db.prepare("SELECT * FROM trust_log WHERE chat_id = ? ORDER BY id DESC LIMIT ?").all(chatId, n)
+			: this.store.db.prepare("SELECT * FROM trust_log ORDER BY id DESC LIMIT ?").all(n)) as unknown as TrustChange[];
+	}
+
+	#logTrust(chatId: string, feature: TrustFeature, from: TrustState, to: TrustState, actor: string, reason: string | null): void {
+		this.store.db
+			.prepare("INSERT INTO trust_log(ts, chat_id, feature, from_state, to_state, actor, reason) VALUES (?, ?, ?, ?, ?, ?, ?)")
+			.run(this.clock.now(), chatId, feature, from, to, actor, reason ? String(reason).slice(0, 80) : null);
+		this.store.db
+			.prepare("INSERT INTO audit_log(ts, actor, action, chat_id, ok, detail) VALUES (?, ?, ?, ?, 1, ?)")
+			.run(this.clock.now(), actor, to === "auto" ? "trust_promoted" : "trust_demoted", chatId, JSON.stringify({ feature, from, to, reason }));
 	}
 
 	/** 白名單內、mode != off 的會話 AI 設定一覽（取消白名單的會話自動視為 off）。 */
