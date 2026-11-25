@@ -87,7 +87,7 @@ const ai = new AiService(store, policy, outbox, audit, {
 const scam = new ScamDetector(store);
 scam.seedBuiltin();
 // AI 判讀（選用）：只有使用者開啟 scam_ai 且 App 內有 key 時
-scam.judge = (msgs) => ai.provider().chat(msgs, { maxTokens: 120 });
+scam.judge = (msgs) => ai.provider().chat(ai.deidMessages(msgs), { maxTokens: 120 });
 const warner = new ScamWarner(store, outbox, audit, scam);
 // 反詐紀錄 / AI 代聊紀錄（人名與內容用資料金鑰加密）
 const events = new EventLog(store, dataKey.box);

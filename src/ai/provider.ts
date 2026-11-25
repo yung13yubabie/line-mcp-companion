@@ -11,11 +11,31 @@ import type { ChatMsg } from "./prompt.ts";
 
 export type ProviderKind = "openai" | "xai" | "anthropic" | "custom" | "mock";
 
+export type MaxTokensField = "max_completion_tokens" | "max_tokens";
+
+/** 備援模型：主模型連不上 / 沒額度 / 答非所問時依序改問（例如本機 llama-server，免費） */
+export interface FallbackModel {
+	base_url: string;
+	model: string;
+	/** 是否帶主 API key（同一家供應商的另一個模型）；本機模型通常不用 */
+	use_key: boolean;
+	max_tokens_field?: MaxTokensField;
+}
+
 export interface AiConfig {
 	provider: ProviderKind;
 	base_url: string;
 	model: string;
 	image_model: string;
+	/** OpenAI 新模型只收 max_completion_tokens；Grok / llama-server 等用 max_tokens。未設定 = 依供應商猜，HTTP 400 時自動換另一個重試 */
+	max_tokens_field?: MaxTokensField;
+	fallback?: FallbackModel[];
+	/** 送到非本機模型前去識別化（人名、電話、網址、帳號…）。預設開 */
+	deidentify?: boolean;
+}
+
+export function defaultTokensField(cfg: Pick<AiConfig, "provider" | "base_url">): MaxTokensField {
+	return cfg.provider === "openai" ? "max_completion_tokens" : "max_tokens";
 }
 
 export interface AiCapabilities {
@@ -85,9 +105,11 @@ export class OpenAICompatProvider implements AiProvider {
 
 	#headers(): Record<string, string> {
 		const key = this.#key();
-		if (!key) throw new AiError("no_api_key", "尚未設定 API key");
-		const h: Record<string, string> = { authorization: `Bearer ${key}`, "content-type": "application/json" };
-		if (this.kind === "anthropic") {
+		const local = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])[:/]/.test(this.#cfg.base_url);
+		if (!key && !local) throw new AiError("no_api_key", "尚未設定 API key");
+		const h: Record<string, string> = { "content-type": "application/json" };
+		if (key) h.authorization = `Bearer ${key}`;
+		if (this.kind === "anthropic" && key) {
 			h["x-api-key"] = key;
 			h["anthropic-version"] = "2023-06-01";
 		}
@@ -135,7 +157,16 @@ export class OpenAICompatProvider implements AiProvider {
 
 	async chat(messages: ChatMsg[], opts: { maxTokens?: number } = {}): Promise<string> {
 		if (!this.#cfg.model) throw new AiError("no_model", "尚未設定模型");
-		const j = await this.#call("POST", "/chat/completions", { model: this.#cfg.model, messages, max_tokens: opts.maxTokens ?? 300, temperature: 0.6 });
+		const field = this.#cfg.max_tokens_field ?? defaultTokensField(this.#cfg);
+		const body = (f: MaxTokensField) => ({ model: this.#cfg.model, messages, [f]: opts.maxTokens ?? 300, ...(f === "max_tokens" ? { temperature: 0.6 } : {}) });
+		let j: Record<string, unknown>;
+		try {
+			j = await this.#call("POST", "/chat/completions", body(field));
+		} catch (e) {
+			// 有的服務只收另一個欄位名（anti-scam-helper 的 maxTokensField 經驗）：HTTP 400 且提到該參數 → 換欄位重試一次
+			if (!(e instanceof AiError) || e.code !== "http_error" || !/HTTP 400/.test(e.message) || !/max_(completion_)?tokens|unsupported|temperature/i.test(e.message)) throw e;
+			j = await this.#call("POST", "/chat/completions", body(field === "max_tokens" ? "max_completion_tokens" : "max_tokens"));
+		}
 		const choices = j.choices as { message?: { content?: unknown } }[] | undefined;
 		const c = choices?.[0]?.message?.content;
 		const text = typeof c === "string" ? c : Array.isArray(c) ? c.map((p: { text?: string }) => p.text ?? "").join("") : "";
@@ -171,6 +202,40 @@ export class OpenAICompatProvider implements AiProvider {
 		} catch (e) {
 			return { text: false, vision: false, image_gen: false, voice: false, models: [], checked_at: now, error: (e as Error).message, heuristic: true };
 		}
+	}
+}
+
+/** 依序嘗試：主模型 → 備援模型。只有連線 / 額度 / 驗證 / 回應錯誤才換下一個。圖片與偵測只用主模型。 */
+export class FallbackChain implements AiProvider {
+	readonly kind: ProviderKind;
+	readonly used: string[] = [];
+	#list: { name: string; p: AiProvider }[];
+	constructor(list: { name: string; p: AiProvider }[]) {
+		if (!list.length) throw new Error("empty provider chain");
+		this.#list = list;
+		this.kind = list[0]!.p.kind;
+	}
+	async chat(messages: ChatMsg[], opts?: { maxTokens?: number }): Promise<string> {
+		let last: unknown;
+		for (const { name, p } of this.#list) {
+			try {
+				const r = await p.chat(messages, opts);
+				this.used.push(name);
+				if (this.used.length > 20) this.used.shift();
+				return r;
+			} catch (e) {
+				last = e;
+				const code = e instanceof AiError ? e.code : "network";
+				if (!["network", "auth", "rate_limited", "http_error", "bad_response", "no_api_key", "not_found", "too_large"].includes(code)) throw e;
+			}
+		}
+		throw last;
+	}
+	generateImage(prompt: string) {
+		return this.#list[0]!.p.generateImage(prompt);
+	}
+	detect() {
+		return this.#list[0]!.p.detect();
 	}
 }
 

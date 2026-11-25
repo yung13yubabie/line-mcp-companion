@@ -541,3 +541,43 @@ test("被隱藏 / 收回的訊息：不回覆、不當脈絡、取消待送、�
 	assert.equal(squareHidden({ type: "RECEIVE_MESSAGE", payload: { receiveMessage: { squareMessage: { state: 1, message: { id: "9", to: "m1", text: "此訊息已被隱藏。" } } } } })!.reason, "hidden_text");
 	assert.equal(squareHidden({ type: "RECEIVE_MESSAGE", payload: { receiveMessage: { squareMessage: { state: 1, message: { id: "9", to: "m1", text: "早安" } } } } }), null);
 });
+
+test("AI 供應商：去識別化（送雲端前）與回覆還原人名；備援鏈；max_tokens 欄位自動切換；本機模型免 key", async () => {
+	const { deidentify, reidentify } = await import("../src/ai/deidentify.ts");
+	const { OpenAICompatProvider, FallbackChain, AiError } = await import("../src/ai/provider.ts");
+	const d = deidentify("王小明說打 0912-345-678 或看 https://evil.example/x ，LINE ID: abc123，住台北市大安區信義路三段100號", ["王小明"]);
+	assert.ok(!/王小明|0912|evil|abc123|信義路/.test(d.text), d.text);
+	assert.ok(d.text.includes("成員A") && d.text.includes("［手機］") && d.text.includes("［網址］"));
+	assert.equal(reidentify("跟成員A說好", d.map), "跟王小明說好");
+	// 內建 AI：雲端模型 → 提示詞裡沒有人名
+	const { ai, policy, provider, store } = setup();
+	store.upsertParticipant(A, "Alice");
+	policy.setAiEnabled(true);
+	policy.set(A, { ai_allowed: true, mode: "suggest" });
+	provider.reply = "好啊成員A，七點見";
+	const s = await ai.suggest(A, "ui");
+	assert.ok(!JSON.stringify(provider.last).includes("Alice"), "去識別化");
+	assert.equal(s.text.includes("Alice"), true, "回覆換回原名");
+	ai.setConfig({ deidentify: false });
+	await ai.suggest(A, "ui");
+	assert.ok(JSON.stringify(provider.last).includes("Alice"), "關掉就不去識別化");
+	// max_tokens 欄位：400 → 換欄位重試
+	const bodies: Record<string, unknown>[] = [];
+	const fakeFetch = (async (_u: unknown, init: { body?: string }) => {
+		const b = JSON.parse(init.body ?? "{}") as Record<string, unknown>;
+		bodies.push(b);
+		if ("max_completion_tokens" in b) return new Response(JSON.stringify({ error: { message: "Unsupported parameter: 'max_completion_tokens'" } }), { status: 400 });
+		return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+	}) as unknown as typeof fetch;
+	const p = new OpenAICompatProvider({ provider: "openai", base_url: "https://api.example.com/v1", model: "m", image_model: "" }, () => "sk-xxxxxxxxxxxx", { fetch: fakeFetch });
+	assert.equal(await p.chat([{ role: "user", content: "hi" }]), "ok");
+	assert.deepEqual(bodies.map((b) => ("max_tokens" in b ? "max_tokens" : "max_completion_tokens")), ["max_completion_tokens", "max_tokens"]);
+	// 本機模型不用 key
+	const local = new OpenAICompatProvider({ provider: "custom", base_url: "http://127.0.0.1:8080/v1", model: "qwen", image_model: "" }, () => undefined, { fetch: fakeFetch });
+	assert.equal(await local.chat([{ role: "user", content: "hi" }]), "ok");
+	// 備援鏈
+	const bad = { kind: "openai" as const, chat: async () => { throw new AiError("rate_limited", "429"); }, generateImage: async () => ({ bytes: new Uint8Array(), mime: "" }), detect: async () => ({}) as never };
+	const chain = new FallbackChain([{ name: "main", p: bad }, { name: "local", p: local }]);
+	assert.equal(await chain.chat([{ role: "user", content: "hi" }]), "ok");
+	assert.deepEqual(chain.used, ["local"]);
+});

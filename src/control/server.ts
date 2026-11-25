@@ -219,7 +219,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const ai = need(deps.ai, "AI");
 			const b = await body(req);
 			const patch: Record<string, unknown> = {};
-			for (const k of ["provider", "base_url", "model", "image_model"]) if (b[k] !== undefined) patch[k] = b[k];
+			for (const k of ["provider", "base_url", "model", "image_model", "max_tokens_field", "fallback", "deidentify"]) if (b[k] !== undefined) patch[k] = b[k];
 			if (Object.keys(patch).length) ai.setConfig(patch as never);
 			if (b.driver !== undefined) ai.setDriver(b.driver === "builtin" ? "builtin" : "connector");
 			if (b.enabled !== undefined) {

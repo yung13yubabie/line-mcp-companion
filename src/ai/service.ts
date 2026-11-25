@@ -8,8 +8,9 @@ import type { Store, MessageRow } from "../storage/db.ts";
 import { AiPolicy, inActiveHours, denyError } from "./policy.ts";
 import { Outbox, type OutboxItem } from "./outbox.ts";
 import { Audit, redact, type Actor } from "./audit.ts";
-import { OpenAICompatProvider, PRESETS, validateBaseUrl, type AiConfig, type AiProvider, type AiCapabilities, type ProviderKind } from "./provider.ts";
-import { buildReplyPrompt, buildImagePrompt, detectInjection, sanitizeReply, historyHasUrl, extractSticker, type HistoryItem } from "./prompt.ts";
+import { OpenAICompatProvider, FallbackChain, PRESETS, validateBaseUrl, type AiConfig, type AiProvider, type AiCapabilities, type ProviderKind, type FallbackModel } from "./provider.ts";
+import { deidentify, reidentify, isLocalUrl } from "./deidentify.ts";
+import { buildReplyPrompt, buildImagePrompt, detectInjection, sanitizeReply, historyHasUrl, extractSticker, type HistoryItem, type ChatMsg } from "./prompt.ts";
 import { StickerCatalog, type StickerRef } from "./stickers.ts";
 import { lieflat } from "../style/lieflat/index.ts";
 import { socialPost, DEFAULT_VOICE, type Platform, type VoiceCard } from "../style/social-post/index.ts";
@@ -81,11 +82,21 @@ export class AiService {
 		const g = (k: string) => this.store.getSetting(k);
 		const provider = (PROVIDERS.includes(g("ai_provider") as ProviderKind) ? g("ai_provider") : "openai") as ProviderKind;
 		const preset = provider === "mock" ? { base_url: "mock://local", model: "mock-chat", image_model: "mock-image" } : PRESETS[provider];
+		let fallback: FallbackModel[] = [];
+		try {
+			fallback = JSON.parse(g("ai_fallback") || "[]") as FallbackModel[];
+		} catch {
+			fallback = [];
+		}
+		const mtf = g("ai_max_tokens_field");
 		return {
 			provider,
 			base_url: g("ai_base_url") ?? preset.base_url,
 			model: g("ai_model") ?? preset.model,
 			image_model: g("ai_image_model") ?? preset.image_model,
+			max_tokens_field: mtf === "max_tokens" || mtf === "max_completion_tokens" ? mtf : undefined,
+			fallback,
+			deidentify: g("ai_deidentify") !== "off",
 		};
 	}
 
@@ -96,25 +107,43 @@ export class AiService {
 		if (provider === "mock" && !this.#opts.allowMock) throw new Error("mock provider is only available in debug mock mode");
 		const switching = patch.provider !== undefined && patch.provider !== cur.provider;
 		const preset = provider === "mock" ? { base_url: "mock://local", model: "mock-chat", image_model: "mock-image" } : PRESETS[provider];
+		const fb = (patch.fallback ?? cur.fallback ?? []).slice(0, 3).map((f) => ({
+			base_url: String(f.base_url ?? "").trim(),
+			model: String(f.model ?? "").trim().slice(0, 100),
+			use_key: f.use_key === true,
+			max_tokens_field: f.max_tokens_field === "max_completion_tokens" ? ("max_completion_tokens" as const) : ("max_tokens" as const),
+		}));
+		for (const f of fb) {
+			validateBaseUrl(f.base_url);
+			if (!f.model) throw new Error("fallback model is required");
+		}
+		const mtf = patch.max_tokens_field === undefined ? cur.max_tokens_field : patch.max_tokens_field;
 		const next: AiConfig = {
 			provider,
 			base_url: (patch.base_url ?? (switching ? preset.base_url : cur.base_url)).trim(),
 			model: (patch.model ?? (switching ? preset.model : cur.model)).trim().slice(0, 100),
 			image_model: (patch.image_model ?? (switching ? preset.image_model : cur.image_model)).trim().slice(0, 100),
+			max_tokens_field: mtf === "max_tokens" || mtf === "max_completion_tokens" ? mtf : undefined,
+			fallback: fb,
+			deidentify: patch.deidentify === undefined ? cur.deidentify !== false : patch.deidentify === true,
 		};
 		if (provider !== "mock" && next.base_url) validateBaseUrl(next.base_url);
+		this.store.setSetting("ai_max_tokens_field", next.max_tokens_field ?? "");
+		this.store.setSetting("ai_fallback", JSON.stringify(fb));
+		this.store.setSetting("ai_deidentify", next.deidentify ? "on" : "off");
 		this.store.setSetting("ai_provider", next.provider);
 		this.store.setSetting("ai_base_url", next.base_url);
 		this.store.setSetting("ai_model", next.model);
 		this.store.setSetting("ai_image_model", next.image_model);
 		this.store.setSetting("ai_capabilities", "");
 		this.#provider = null;
-		this.audit.log("ui", "ai_config_changed", { detail: { provider: next.provider, base_url: next.base_url, model: next.model, image_model: next.image_model } });
+		this.audit.log("ui", "ai_config_changed", { detail: { provider: next.provider, base_url: next.base_url, model: next.model, image_model: next.image_model, fallback: fb.map((f) => `${f.model}@${f.base_url}`), deidentify: next.deidentify } });
 		return next;
 	}
 
 	hasKey(): boolean {
-		return this.config().provider === "mock" || !!this.#opts.getKey();
+		const c = this.config();
+		return c.provider === "mock" || !!this.#opts.getKey() || isLocalUrl(c.base_url) || (c.fallback ?? []).some((f) => isLocalUrl(f.base_url) && !f.use_key);
 	}
 
 	/** 只回傳 key 的末 4 碼，給 UI 顯示 */
@@ -128,8 +157,26 @@ export class AiService {
 		const cfg = this.config();
 		if (!this.hasKey()) throw new Error("尚未設定 API key");
 		const f = this.#opts.providerFactory ?? ((c, k) => new OpenAICompatProvider(c, k));
-		this.#provider = f(cfg, this.#opts.getKey);
+		const chain = [{ name: cfg.model, p: f(cfg, this.#opts.getKey) }];
+		for (const fb of cfg.fallback ?? []) {
+			const c2: AiConfig = { provider: isLocalUrl(fb.base_url) ? "custom" : cfg.provider, base_url: fb.base_url, model: fb.model, image_model: "", max_tokens_field: fb.max_tokens_field };
+			chain.push({ name: fb.model, p: cfg.provider === "mock" ? f(c2, () => undefined) : new OpenAICompatProvider(c2, fb.use_key ? this.#opts.getKey : () => undefined) });
+		}
+		this.#provider = chain.length === 1 ? chain[0]!.p : new FallbackChain(chain);
 		return this.#provider;
+	}
+
+	/** 要不要去識別化：設定開（預設）且主模型不是本機 */
+	shouldDeidentify(): boolean {
+		const c = this.config();
+		return c.deidentify !== false && !isLocalUrl(c.base_url);
+	}
+
+	/** 反詐 AI 判讀等單次呼叫用：把 user 訊息去識別化 */
+	deidMessages(msgs: ChatMsg[], names: string[] = []): ChatMsg[] {
+		if (!this.shouldDeidentify()) return msgs;
+		const map = { names: new Map<string, string>() };
+		return msgs.map((m) => (m.role === "user" ? { ...m, content: deidentify(m.content, names, map).text } : m));
 	}
 
 	/** 換了 key 之後呼叫 */
@@ -191,7 +238,15 @@ export class AiService {
 		const hits = [...new Set(incoming.flatMap((h) => detectInjection(h.text).hits))];
 		const chat = this.store.getChat(chatId)!;
 		const stickerList = this.stickers.promptList();
-		const msgs = buildReplyPrompt({ chatName: chat.name, history, instruction, persona: this.persona, stickers: stickerList, target });
+		// 去識別化（送到雲端模型前）：人名 → 成員A…，電話 / 網址 / 帳號 / LINE ID / 地址遮蔽；回覆裡的代號再換回人名
+		const deid = this.shouldDeidentify();
+		const dmap = { names: new Map<string, string>() };
+		const senders = [...history, ...(target ? [target] : [])].map((h) => h.sender);
+		const names = [...new Set([...senders, ...(chat.type === "USER" && chat.name ? [chat.name] : [])].filter((n) => n && n !== "?"))];
+		const D = (s: string | null | undefined) => (s == null || !deid ? (s ?? null) : deidentify(s, names, dmap).text);
+		const pHistory = deid ? history.map((h) => ({ ...h, sender: D(h.sender)!, text: D(h.text) })) : history;
+		const pTarget = deid && target ? { ...target, sender: D(target.sender)!, text: D(target.text) } : target;
+		const msgs = buildReplyPrompt({ chatName: deid ? D(chat.name) : chat.name, history: pHistory, instruction: deid ? D(instruction ?? null) : instruction, persona: this.persona, stickers: stickerList, target: pTarget });
 		let raw: string;
 		try {
 			raw = await this.provider().chat(msgs);
@@ -199,6 +254,7 @@ export class AiService {
 			this.audit.log(actor, "ai_error", { chatId, ok: false, detail: { error: redact((e as Error).message, 200) } });
 			throw e;
 		}
+		if (deid) raw = reidentify(raw, dmap);
 		const { text: body, stickerKey } = extractSticker(raw);
 		const entry = stickerKey ? this.stickers.list({ ownedOnly: true }).find((e) => e.sticker_id === stickerKey) : undefined;
 		const sticker: StickerRef | null = entry ? { package_id: entry.package_id, sticker_id: entry.sticker_id, version: entry.version } : null;
