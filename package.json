@@ -1,6 +1,6 @@
 {
   "name": "line-mcp-app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "LINE 次要裝置同步 + 本機 MCP（Android App 核心）",
   "scripts": {
     "test": "node --test test/*.test.ts",

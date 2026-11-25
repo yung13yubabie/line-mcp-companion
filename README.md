@@ -1,86 +1,71 @@
-# LINE MCP App（Android）— 階段 1 骨架
+# LINE MCP Companion
 
-以「次要裝置（ANDROIDSECONDARY）」登入個人 LINE 帳號，把**勾選的會話**同步到手機本地 SQLite，並在 `127.0.0.1` 提供 MCP Server 給外部 AI 讀取。預設**不標已讀**。
+在 Android 手機上以「次要裝置」登入 LINE，把你**勾選的聊天**存在手機本機，並在 `127.0.0.1` 提供 MCP，讓 AI 幫你讀訊息、擬回覆、抓詐騙。預設不標已讀，AI 功能預設全關。
 
-> ⚠️ 非官方協議（LINEJS），LINE 可能限制或停用帳號。第一次測試建議用小號。
+> ⚠️ **非官方協定，帳號可能被限制或停用**
+> 本 App 使用非官方的 LINE 通訊協定（[LINEJS](https://github.com/evex-dev/linejs)），不是 LINE 官方功能。LINE 可能因此限制或停用你的帳號。**建議用次要帳號或測試帳號。**
+> 本專案與 LY Corporation 沒有任何關係，也未獲授權或背書。「LINE」是 LY Corporation 的商標。
 
-## 架構
+## 功能
 
-```
-┌──────── Android App（tw.linemcp.app）────────────────────────┐
-│ Kotlin / Jetpack Compose UI                                  │
-│   登入（QR+PIN）· 聊天列表勾選 · 設定                          │
-│        │ HTTP 127.0.0.1:47824 /control（Bearer token）        │
-│ NodeService（Foreground Service, dataSync）                  │
-│   └─ 執行 libnode.so（Node 24 arm64）+ assets/nodeapp/main.mjs │
-│        ├─ auth/session   LINEJS BaseClient(device=ANDROIDSECONDARY) │
-│        ├─ guard          擋 sendChatChecked/markAsRead/金鑰註冊   │
-│        ├─ sync/engine    talk.sync 長輪詢 + getRecentMessagesV2   │
-│        ├─ storage        node:sqlite + FTS5 trigram（filesDir）  │
-│        ├─ whitelist      只有勾選會話能被 MCP 看到              │
-│        └─ mcp/server     127.0.0.1:47823/mcp（Streamable HTTP） │
-└──────────────────────────────────────────────────────────────┘
-```
+- **本機同步**：只同步勾選的聊天，SQLite + 全文搜尋（中文可用），不標已讀
+- **MCP（Streamable HTTP）**：`127.0.0.1:47823/mcp`，Bearer token，只綁本機
+- **代聊二選一**（總控台切換）
+  - **由連接器代聊**：外部 AI（Claude、ChatGPT…）經 MCP 的 `send_message` 回覆，App 不需要 API key
+  - **App 內建 AI**：填自己的 OpenAI / Grok / Claude（OpenAI 相容）API key，App 自己擬建議
+- **安全預設**：AI 代聊有自己的白名單（要同時在 MCP 白名單）、發送前確認（預設開）、頻率 / 每日上限、活躍時段、緊急停止、稽核紀錄、提示注入防護
+- **長按訊息回覆這則**：引用回覆，可請 AI 擬一句，或回你用過的貼圖
+- **去 AI 味**：送出前把太像 AI 的句子改自然（Lieflat 規則，每個聊天可關）
+- **反詐雷達**：本機規則 + 可擴充範例庫，不需要 AI；可選擇在群組即時引用回覆提醒並 @ 管理員（每群預設關）
+- **社群貼文草稿**：把聊天內容整理成你口吻的 FB / IG / Threads / X 草稿（只草稿，不發文）
 
-## 目錄
+## MCP 工具
 
-| 路徑 | 內容 |
+| 類別 | 工具 |
 | --- | --- |
-| `src/auth/session.ts` | 次要裝置登入（QR+PIN、token），token 存 SQLite |
-| `src/guard/upstream-guard.ts` | 已讀回條與 E2EE 金鑰註冊的守門員（預設封鎖） |
-| `src/storage/schema.ts`, `db.ts` | SQLite 結構（chat / message / message_fts / read_state / media / line_kv ...） |
-| `src/storage/kv-storage.ts` | LINEJS `BaseStorage` 的 SQLite 實作 |
-| `src/whitelist.ts` | 會話白名單（未允許與不存在回同一錯誤） |
-| `src/sync/engine.ts` | 同步引擎；`sync_scope=allowed`（預設）只抓勾選會話內容 |
-| `src/sync/linejs-source.ts` | 真實 LINE 來源（**尚未對真帳號驗證**） |
-| `src/media/cache.ts` | 附件下載與快取 |
-| `src/mcp/tools.ts`, `server.ts` | 8 個基本 MCP 工具與 HTTP server |
-| `src/control/server.ts` | 給 Kotlin UI 的控制 API |
-| `src/main.ts` | 常駐程序進入點（Android/桌面共用） |
-| `scripts/login-poc.ts` | 桌面登入 PoC |
-| `scripts/serve-fake.ts` | 假資料 MCP，方便接 AI 客戶端試用 |
-| `test/` | 單元 / 端到端測試（全部假資料，不連 LINE） |
-| `android/` | Android Gradle 專案（Compose UI + NodeService） |
+| 讀取 | `list_allowed_chats` `get_messages` `search_messages` `get_attachment` `download_media` `get_unread_summary` `get_sync_status` `trigger_sync` |
+| 送出 | `send_message`（文字 / 貼圖 / 引用回覆）`generate_and_send_image` `get_ai_suggestion` `get_outbox_item` `list_stickers` |
+| 反詐 | `scan_scam_alerts(since, chat_id?)` `list_scam_samples` `add_scam_sample` |
 
-## MCP 工具（基本，永遠可用）
+所有工具都只看得到白名單內的聊天；送出類預設進確認佇列，要你在 App 按「送出」。連接器設定見 [docs/connectors.md](docs/connectors.md)。
 
-`list_allowed_chats`、`get_messages`、`search_messages`、`get_attachment`、`download_media`、`get_unread_summary`、`get_sync_status`、`trigger_sync`。全部受白名單限制，沒有任何工具會呼叫已讀 API。
+## 安裝（側載）
+
+1. 下載對應的 APK：真機用 `arm64-v8a`，模擬器用 `x86_64`
+2. 確認簽章（release 版）：
+
+   ```
+   apksigner verify --print-certs line-mcp-app-0.2.0-arm64-v8a-release.apk
+   ```
+
+   憑證 SHA-256 必須是：
+
+   ```
+   75:E7:2F:E9:BC:01:B9:E8:9F:78:A9:42:53:12:58:1C:1D:4D:AA:92:E9:CB:E2:14:63:F8:76:18:97:EC:A9:0A
+   ```
+
+3. 開啟 App → 看完風險說明 → 產生 QR → 用另一台裝置顯示並以手機 LINE 掃描 → 輸入 PIN
+4. 在「聊天」勾選要開放的聊天；在「設定」用指紋 / 螢幕鎖確認後複製 MCP 設定
 
 ## 開發
 
-需要 Node 24.11+（LINEJS 要求 `^22.18 || ^24.11 || >=26`，`node:sqlite` 也需要新版 Node）。
+需要 Node 24、Bun（打包）、Android SDK。
 
-```bash
+```
 npm install
-npm test                 # 13 個測試，不連網
+npm test                       # 單元 / 端到端測試（全部假資料，不連 LINE、不呼叫 AI）
 npm run typecheck
-npm run serve:fake       # 假資料 MCP：http://127.0.0.1:47823/mcp
+LMA_PASSPHRASE='至少 12 個字的密語' npm start   # 桌面執行；沒設 token 會自動產生並只印一次
+npm run android:debug          # debug APK（含 Mock 模式）
+npm run android:release        # release APK（移除 Mock，需 release keystore）
 ```
 
-### 第一次真實登入（桌面 PoC）
+- 桌面模式必須設 `LMA_PASSPHRASE`（加密 LINE token / E2EE 金鑰），否則拒絕啟動
+- release 簽章：keystore 放在 repo 外（預設 `../keys/release.jks` + 權限 0600 的 `../keys/keystore.pass`，可用 `LMA_KEYSTORE` / `LMA_KEYSTORE_PASS_FILE` 覆寫）；找不到就不簽，不會退回 debug 金鑰
+- Mock 模式（只在 debug 版）：設定 → 開發者 → Mock 模式，完全離線的假資料，見 [docs/mock-mode.md](docs/mock-mode.md)
 
-```bash
-node scripts/login-poc.ts            # 終端機印出 QR → 手機 LINE 掃描 → 手機輸入畫面上的 PIN
-node scripts/login-poc.ts --token    # 之後用保存的 token 登入
-```
+安全設計與威脅模型：[docs/SECURITY-REVIEW-BRIEF.md](docs/SECURITY-REVIEW-BRIEF.md)
 
-成功會印出顯示名稱與群組數；token 與金鑰在 `.state/line.db`（已 gitignore，請勿外流）。
+## 授權
 
-## Android 建置
-
-```bash
-npm run bundle:android               # 把 src/main.ts 打包成 assets/nodeapp/main.mjs
-cd android && ./gradlew assembleDebug
-```
-
-**還缺 `android/app/src/main/jniLibs/arm64-v8a/libnode.so`**（Android arm64 版 Node 24 執行檔）。nodejs-mobile 只到 Node 18.20.4，不符合 LINEJS 與 `node:sqlite` 的版本需求，所以要自備：
-
-1. 用 Node 官方原始碼的 `android-configure` + Android NDK 交叉編譯 Node 24（建議，靜態連結 OpenSSL/ICU，產物單一檔案）；或
-2. 取 Termux 的 `nodejs-lts`（24.22.3）並一併打包它依賴的 `libc++ openssl c-ares libicu libsqlite zlib`，用 patchelf 改 DT_NEEDED/RUNPATH 成 `lib*.so` 名稱。
-
-## 安全預設
-
-- MCP 與控制 API 只綁 `127.0.0.1`，Android 端一律帶隨機 Bearer token（存在 Android Keystore 加密的 SharedPreferences）。
-- 已讀：`sendChatChecked / markAsRead / markChatsAsRead / markThreadsAsRead` 預設封鎖，`settings.read_receipts=on` 才放行。
-- E2EE：預設封鎖金鑰註冊；QR 登入若沒從主裝置拿到金鑰，登入會**明確失敗**而不是悄悄註冊新金鑰。
-- `allowBackup=false`；系統「清除資料」後重新開 App → 重新 QR 登入 → 自動完整同步。
+Apache-2.0（見 [LICENSE](LICENSE)、[NOTICE](NOTICE)），**`src/style/lieflat/` 除外**：該目錄改作自 Lieflat Less AI Tone，維持 CC BY-NC 4.0（僅限非商業使用）。第三方授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
