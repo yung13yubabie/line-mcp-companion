@@ -87,7 +87,7 @@ fun SettingsScreen(client: ControlClient) {
         token = withContext(Dispatchers.IO) { Secrets.mcpToken(ctx) }
         batteryOk = (ctx.getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(ctx.packageName)
     }
-    LaunchedEffect(Unit) { while (true) { info = runCatching { client.info() }.getOrNull(); delay(3000) } }
+    LaunchedEffect(Unit) { var last = ""; while (true) { val i = runCatching { client.info() }.getOrNull(); val s = i?.toString() ?: ""; if (s != last) { last = s; info = i }; delay(4000) } }
     // 顯示 30 秒後自動遮起來
     LaunchedEffect(revealed) { if (revealed) { delay(30_000); revealed = false } }
     val url = info?.optString("mcp_url") ?: "http://127.0.0.1:47823/mcp"

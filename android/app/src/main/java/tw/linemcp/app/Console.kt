@@ -186,7 +186,7 @@ fun QueueScreen(client: ControlClient, onBack: () -> Unit) {
     var tick by remember { mutableIntStateOf(0) }
     var err by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(tick) { while (true) { items = runCatching { client.getArr("/queue").objs() }.getOrDefault(items ?: emptyList()); delay(4000) } }
+    LaunchedEffect(tick) { var last = ""; while (true) { runCatching { client.getArr("/queue") }.onSuccess { val s = it.toString(); if (s != last || items == null) { last = s; items = it.objs() } }.onFailure { if (items == null) items = emptyList() }; delay(4000) } }
     Page("確認佇列", onBack) {
         Text("AI 擬好的訊息會先放這裡，你點「送出」才會真的送。", fontSize = 13.sp, color = Color.Gray)
         err?.let { Text(it, color = Danger, fontSize = 12.sp) }
