@@ -9,6 +9,7 @@
  * 以及「通知一律引用回覆那則訊息、不引用詐騙內容、@ 最多 3 人、@ 失敗就拿掉 @ 段落重送」的作法。
  * 修改：TypeScript 移植；範本改為「疑似類型＋一句話提示＋@管理員」，不加（AI代理）等標籤。
  */
+import { hasLink } from "../ai/content-scan.ts";
 import type { Store } from "../storage/db.ts";
 import type { Outbox, OutboxItem } from "../ai/outbox.ts";
 import type { Audit } from "../ai/audit.ts";
@@ -83,7 +84,7 @@ export function checkCustomWarning(text: string, scamText: string | null | undef
 	const t = String(text ?? "").normalize("NFC").trim();
 	if (!t) throw new Error("warning text is required");
 	if ([...t].length > 300) throw new Error("warning text too long (max 300)");
-	if (/(https?:\/\/|www\.|line\.me|lin\.ee|\b[a-z0-9-]+\.[a-z]{2,}\b)/i.test(t)) throw new Error("warning_contains_link: 提醒文字不能有連結或網址");
+	if (/(https?:\/\/|www\.|line\.me|lin\.ee|\b[a-z0-9-]+\.[a-z]{2,}\b)/i.test(t) || hasLink(t)) throw new Error("warning_contains_link: 提醒文字不能有連結或網址");
 	if (/(line|賴)\s*id\s*[:：]?\s*@?[a-z0-9._-]{3,}|@[a-z0-9._-]*\d[a-z0-9._-]{3,}/i.test(t.replace(/\{[a-z]+\}/g, ""))) throw new Error("warning_contains_contact: 提醒文字不能有 LINE ID");
 	const norm = (s: string) => s.normalize("NFKC").replace(/[\s\u3000，。！？、,.!?:：;；「」『』"'（）()]/g, "").toLowerCase();
 	const a = norm(scamText ?? "");

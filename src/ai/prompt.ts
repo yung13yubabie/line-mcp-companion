@@ -9,6 +9,8 @@
  * 啟發式不可能完美，所以真正的保護是「白名單 + 發送前確認預設開 + 上限 + kill switch」。
  */
 
+import { normalizeForScan, scanContacts, linksNotIn } from "./content-scan.ts";
+
 export interface HistoryItem {
 	id?: string;
 	sender: string;
@@ -40,7 +42,9 @@ const PATTERNS: [string, RegExp][] = [
 /** 啟發式偵測：回傳命中的規則名稱。 */
 export function detectInjection(text: string | null | undefined): { suspected: boolean; hits: string[] } {
 	if (!text) return { suspected: false, hits: [] };
-	const hits = PATTERNS.filter(([, re]) => re.test(text)).map(([n]) => n);
+	// M-11：先 NFKC＋去零寬＋還原 defang，再比對（原文也比一次）
+	const n = normalizeForScan(text);
+	const hits = PATTERNS.filter(([, re]) => re.test(n) || re.test(text)).map(([n]) => n);
 	return { suspected: hits.length > 0, hits };
 }
 
@@ -111,9 +115,12 @@ const URL_RE = /\bhttps?:\/\/[^\s]+|\bwww\.[^\s]+/i;
 
 /**
  * 清理模型輸出。throws：空字串或含祕密。
- * flags：url_in_output（歷史裡沒有網址卻出現網址）→ 強制人工確認。
+ * flags（任一 → 強制人工確認）：
+ *   url_in_output：輸出含網址／網域／IP，且不是逐字出現在 trustedTexts（我自己傳過的訊息）裡（M-11：
+ *     不再因為「歷史裡有任何網址」就放行）
+ *   contact_in_output：輸出含電話／LINE ID／Email
  */
-export function sanitizeReply(raw: string, opts: { secrets?: string[]; historyHasUrl?: boolean; maxChars?: number } = {}): { text: string; flags: string[] } {
+export function sanitizeReply(raw: string, opts: { secrets?: string[]; trustedTexts?: string[]; maxChars?: number } = {}): { text: string; flags: string[] } {
 	let t = (raw ?? "").replace(/\r/g, "").trim();
 	t = t.replace(/^(assistant|ai|助理|回覆|我)\s*[:：]\s*/i, "");
 	t = t.replace(/^["「『](.*)["」』]$/s, "$1").trim();
@@ -125,13 +132,20 @@ export function sanitizeReply(raw: string, opts: { secrets?: string[]; historyHa
 		if (s && s.length >= 8 && t.includes(s)) throw new Error("reply_contains_secret");
 	}
 	const flags: string[] = [];
-	if (URL_RE.test(t) && !opts.historyHasUrl) flags.push("url_in_output");
+	const { kinds } = scanContacts(t);
+	if (kinds.some((k) => k === "url" || k === "domain" || k === "ip") && linksNotIn(t, opts.trustedTexts ?? [])) flags.push("url_in_output");
+	if (kinds.some((k) => k === "phone" || k === "line_id" || k === "email")) flags.push("contact_in_output");
 	if (detectInjection(t).suspected) flags.push("suspicious_output");
 	return { text: t, flags };
 }
 
 export function historyHasUrl(h: HistoryItem[]): boolean {
-	return h.some((x) => x.text !== null && URL_RE.test(x.text));
+	return h.some((x) => x.text !== null && URL_RE.test(normalizeForScan(x.text)));
+}
+
+/** 可信來源：只有我自己傳過的文字（對方貼的網址不算，M-11） */
+export function trustedTexts(h: HistoryItem[]): string[] {
+	return h.filter((x) => x.fromSelf && x.text).map((x) => x.text!);
 }
 
 /** 取出模型輸出最後的 [sticker:KEY] 標記 */
