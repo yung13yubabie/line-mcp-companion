@@ -8,7 +8,7 @@ CC BY-NC 4.0 (see src/style/lieflat/NOTICE.md).
 This product includes software and material from third parties; see THIRD_PARTY_NOTICES.md:
 - LINEJS (@evex-dev/linejs) — MIT, Copyright (c) 2024-2026 Evex Developers
 - line-mcp-server — Apache-2.0 (design reference: read-receipt / E2EE key-registration guards)
-- anti-scam-helper (mars-tw) — Apache-2.0 (scam rules, samples, notice helpers; modified)
+- anti-scam-helper (mars-tw) — Apache-2.0 (scam rules, samples, notice helpers, de-identification; modified)
 - claude-skill-social-post (Hao0321) — MIT, Copyright (c) 2026 Hao0321 contributors (adapted)
 - Lieflat Less AI Tone (shiujan) — CC BY-NC 4.0 (adapted; non-commercial)
 

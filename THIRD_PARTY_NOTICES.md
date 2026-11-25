@@ -59,6 +59,10 @@ SOFTWARE.
     for alert-only use; added category mapping and one-line tips.
   - `src/scam/samples.default.json` — the example corpus from `guard/scam-patterns.example.json`
     (categories and OK counter-examples), unchanged text, used as the built-in, user-extendable sample table.
+  - `src/ai/deidentify.ts` — `deidentify()` from `guard/chat-training.mjs`: member names → 成員A/B…, and
+    masking of e-mail, URLs (165 anti-fraud site kept), national ID, mobile / landline numbers, bank account,
+    LINE ID, @ID and address patterns before text goes to a non-local LLM. Ported to TypeScript; added
+    `reidentify()` to restore names in the model reply.
   - `src/scam/warner.ts` — `scrubNotice`, `safeName`, `stripMentions` from `guard/notice.mjs`, and the notice
     behaviour (quote-reply the scam message, never quote scam text, at most 3 mentions, retry without
     mentions if mentioning fails). Ported to TypeScript; new template format without agent labels.

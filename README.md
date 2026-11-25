@@ -12,8 +12,11 @@
 - **MCP（Streamable HTTP）**：`127.0.0.1:47823/mcp`，Bearer token，只綁本機
 - **代聊二選一**（總控台切換）
   - **由連接器代聊**：外部 AI（Claude、ChatGPT…）經 MCP 的 `send_message` 回覆，App 不需要 API key
-  - **App 內建 AI**：填自己的 OpenAI / Grok / Claude（OpenAI 相容）API key，App 自己擬建議
-- **安全預設**：AI 代聊有自己的白名單（要同時在 MCP 白名單）、發送前確認（預設開）、頻率 / 每日上限、活躍時段、緊急停止、稽核紀錄、提示注入防護
+  - **App 內建 AI**：任何 OpenAI 相容端點（OpenAI / Grok / 本機 llama-server…）＋備援模型鏈；送雲端前預設去識別化（人名、電話、帳號…）
+- **雲端連接器**（預設關）：ChatGPT / Claude / Grok / Gemini 的自訂 MCP 連接器 — OAuth 2.1（DCR + PKCE + App 內配對碼）、Streamable HTTP + 舊版 SSE、可選 Cloudflare 通道，見 [docs/connectors.md](docs/connectors.md)
+- **信任狀態**：每個聊天的 AI 回覆、反詐提醒各自「審核（預設）→ 自動」，一鍵降回；緊急停止全部降回
+- **安全預設**：AI 代聊有自己的白名單（要同時在 MCP 白名單）、確認佇列（可改字 / 貼圖再送）、頻率 / 每日上限、活躍時段、緊急停止、稽核紀錄、提示注入防護；被隱藏 / 收回的訊息不回、不當脈絡
+- **紀錄**：反詐與 AI 代聊紀錄（加密保存、可篩選、匯出 CSV、保留天數、清除）
 - **長按訊息回覆這則**：引用回覆，可請 AI 擬一句，或回你用過的貼圖
 - **去 AI 味**：送出前把太像 AI 的句子改自然（Lieflat 規則，每個聊天可關）
 - **反詐雷達**：本機規則 + 可擴充範例庫，不需要 AI；可選擇在群組即時引用回覆提醒並 @ 管理員（每群預設關）
@@ -25,7 +28,9 @@
 | --- | --- |
 | 讀取 | `list_allowed_chats` `get_messages` `search_messages` `get_attachment` `download_media` `get_unread_summary` `get_sync_status` `trigger_sync` |
 | 送出 | `send_message`（文字 / 貼圖 / 引用回覆）`generate_and_send_image` `get_ai_suggestion` `get_outbox_item` `list_stickers` |
-| 反詐 | `scan_scam_alerts(since, chat_id?)` `list_scam_samples` `add_scam_sample` |
+| 審核 | `list_pending` `edit_pending` `approve_pending`（要在 App 開「允許 MCP 核准」）`reject_pending` `get_chat_trust` `set_chat_trust`（升自動要在 App 開「允許 MCP 升級」）`get_ai_log` |
+| 反詐 | `scan_scam_alerts(since, chat_id?)` `list_scam_samples` `add_scam_sample` `compose_scam_warning` `mark_scam_false_positive` `trust_scam_member` `get_scam_log` |
+| ChatGPT 相容 | `search` `fetch`（只讀） |
 
 所有工具都只看得到白名單內的聊天；送出類預設進確認佇列，要你在 App 按「送出」。連接器設定見 [docs/connectors.md](docs/connectors.md)。
 
