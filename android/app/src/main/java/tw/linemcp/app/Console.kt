@@ -47,7 +47,8 @@ fun ConsoleScreen(client: ControlClient, go: (Screen) -> Unit) {
     var err by remember { mutableStateOf<String?>(null) }
     var tick by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(tick) { while (true) { runCatching { client.getObj("/dashboard") }.onSuccess { d = it; err = null }.onFailure { err = friendly(it) }; delay(3000) } }
+    // 只有內容變了才更新狀態，避免整頁每次輪詢都重組（低階裝置/模擬器會卡）
+    LaunchedEffect(tick) { var last = ""; while (true) { runCatching { client.getObj("/dashboard") }.onSuccess { val s = it.toString(); if (s != last || d == null) { last = s; d = it }; if (err != null) err = null }.onFailure { err = friendly(it) }; delay(4000) } }
     fun post(path: String, body: JSONObject) = scope.launch { runCatching { client.post(path, body) }.onFailure { err = friendly(it) }; tick++ }
     Page("總控台", null) {
         val dash = d ?: run { Loading(); return@Page }

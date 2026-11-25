@@ -34,7 +34,7 @@ Desktop/dev: the same `src/main.ts` runs under Node 24 (`npm start`).
 | LINE servers → Node | message content from any contact | prompt injection, scam content, malformed data | messages are data only; injection heuristics; AI output sanitised; nothing auto-sends without policy |
 | Other apps on the phone → loopback ports | any local app (no permission needed to hit 127.0.0.1) | read chats, send messages, steal tokens | Bearer tokens (timing-safe), whitelist, rate limits, no CORS, Origin rejected, Host must be loopback |
 | Web pages in a browser on the phone | JS on any site | DNS rebinding / CSRF to loopback | any `Origin` header → 403; `Host` must be `127.0.0.1`/`localhost`/`[::1]`; no CORS headers |
-| MCP client (external AI) | the AI model and whatever it read | sending messages the user did not want, exfiltrating other chats | MCP whitelist + separate AI whitelist, per-chat mode, confirm queue (default ON), caps, active hours, kill switch, audit |
+| MCP client (external AI) | the AI model and whatever it read | sending messages the user did not want, exfiltrating other chats | MCP whitelist + separate AI whitelist, per-chat mode, per-chat trust REVIEW by default (MCP cannot approve or promote unless the user enables it in-app), caps, active hours, kill switch, audit |
 | AI provider (built-in mode) | provider response | injection in output, key leakage | output sanitiser (secret check, URL flag, length), forced confirmation on flags |
 | Device storage | other apps (no), backups, rooted device / forensic copy | token / key theft | app-private storage, `allowBackup=false`, line_kv AES-GCM with Keystore-protected key, secrets in EncryptedSharedPreferences |
 | Clipboard | other apps, clipboard previews | token leakage | copy only after BiometricPrompt/device credential; `EXTRA_IS_SENSITIVE`; auto-clear after 60 s |
@@ -80,18 +80,82 @@ send permit (`withSendPermit`); LINEJS send methods called outside it are blocke
 `AiPolicy.checkBasic` (`src/ai/policy.ts`), in order: kill switch → AI master switch → chat in MCP
 whitelist → chat in AI whitelist → mode ≠ off → image permission. `checkSend` adds active hours, min
 interval, hourly cap (skipped only when the user approves in the queue) and always per-chat and global
-daily caps. `needsConfirmation` = mode ≠ auto OR confirm_send (default true) OR any risk flag.
-Kill switch ON returns all scheduled items to pending and cancels scheduled scam warnings.
+daily caps. `needsConfirmation` = mode ≠ auto OR trust = REVIEW OR any risk flag.
 
-Driver mode (`ai_driver`): `connector` (default) — no in-app AI calls; external MCP clients send via the
-same gates. `builtin` — in-app provider drafts suggestions/auto replies.
+### 5.1 Per-chat trust state machine (t235u)
 
-Anti-scam warnings (`src/scam/warner.ts`) are the only messages that skip the confirm queue, and only for
-groups where the user switched them on (default OFF). Still gated by: kill switch, MCP whitelist,
-per-sender+category cooldown (30 min), one warning per message, per-group daily cap (10), audit log.
-Warnings never quote the scam text; nicknames are sanitised; LINE banned words are replaced.
+Two independent states per chat: `ai` (AI 代聊, column `chat_ai.confirm_send`) and `scam` (scam
+warnings, column `scam_warn.trust`). Each is `REVIEW` (default) or `AUTO`.
+
+| From → To | Who may do it | Notes |
+| --- | --- | --- |
+| REVIEW → AUTO | user in the app (per-chat chips); MCP `set_chat_trust` **only** with `confirm_auto: true` **and** the in-app toggle 「允許 MCP 升級到自動」 (`mcp_allow_promote`, default OFF) | chat must be in the whitelist(s) |
+| AUTO → REVIEW | always: 總控台 「降回審核」 per chat, 「全部降回審核」, per-chat settings, MCP `set_chat_trust` (never gated) | |
+| any → REVIEW (system) | kill switch ON (`demoteAll`), chat removed from the AI whitelist | logged with actor `system` |
+
+REVIEW: every AI reply and every scam warning is created as `pending` in the confirm queue; the user can
+edit text / sticker / template, then approve or reject. AUTO: sends without confirmation, but caps,
+cooldowns, active hours, the kill switch and risk flags (forced confirmation) still apply. Every change is
+written to `trust_log` (chat, feature, from, to, actor ui|mcp|system, reason, time) and shown in 總控台
+(「信任狀態」) and per chat; it is also mirrored into the audit log.
+
+### 5.2 MCP review tools (t236u)
+
+`list_pending`, `edit_pending`, `reject_pending` — always allowed for whitelisted chats.
+`approve_pending` — only when the in-app toggle 「允許 MCP 核准佇列」 (`mcp_allow_approve`, default OFF) is
+on; otherwise a connector could approve its own drafts and bypass REVIEW. `get_chat_trust`,
+`set_chat_trust` (see 5.1). Approve / set_trust / compose count toward the send-tool rate limit
+(10/min). All MCP actions are audited with actor `mcp`.
+
+### 5.3 Anti-scam warnings
+
+Warnings follow the `scam` trust state (REVIEW by default — queued; AUTO only after the user promotes).
+Gates: kill switch, MCP whitelist, per-sender+category cooldown (30 min, pending items count), one
+warning per message, per-group daily cap (10), trusted-member whitelist, audit log. Warnings never quote
+the scam text; nicknames are sanitised; LINE banned words are replaced.
+
+Custom / connector-written warning text (`compose_scam_warning`, queue edit, 寫提醒 dialog) passes
+`checkCustomWarning` (`src/scam/warner.ts`): ≤ 300 chars; rejects any link (http/www/line.me/lin.ee or
+any `name.tld`), LINE IDs (`line id …`, `@…digits`), and any run of ≥ 10 normalised characters copied
+from the scam message; then `scrubNotice` (banned words). Built-in templates/samples are reference only.
+
+Trusted members (per group, `scam_member`): never trigger warnings; the detection is still recorded in the
+audit log once as `suppressed_member`. 「誤判→信任此人」 on an alert marks it false positive, cancels a
+queued warning and trusts the sender (UI or MCP `mark_scam_false_positive`; `trust_scam_member` edits the list).
 
 MCP `add_scam_sample` can only add `SCAM` samples (cannot whitelist a pattern via OK samples).
+
+### 5.4 Audit logs (t237u)
+
+`scam_log` (chat, sender id + name, time, message id, text snapshot, category, rule, action:
+alert_only / queued / scheduled / sent / rejected / suppressed_member / cooldown / daily_cap / …) and
+`ai_log` (trigger message who/what, generated reply, edits, approve/reject, sent time, failures). Sender
+names, message snapshots and reply texts are **encrypted at rest** with the same AES-256-GCM data key
+(`src/storage/event-log.ts`, AAD bound to table/chat/message/field); rule names, categories and actions are
+plaintext. Retention `log_retention_days` (default 30, 1–365) pruned hourly; 「清除紀錄」 deletes with
+`secure_delete` + WAL checkpoint. CSV export (UI via SAF, control API `?format=csv`, MCP
+`get_scam_log`/`get_ai_log`) decrypts on the device; cells are formula-injection guarded (`=+-@` prefixed
+with `'`). Exported CSV is plaintext — user's responsibility once shared.
+
+### 5.5 Hidden / removed messages (t238u, t239u)
+
+Messages shown as 「此訊息已被隱藏。」 (admin-hidden, reported, deleted, unsent) are detected by exact text,
+LINEJS talk ops `NOTIFIED_DESTROY_MESSAGE` / `DESTROY_MESSAGE`, and (helper `src/sync/square-events.ts`)
+Square message state DELETED/FORBIDDEN/UNSENT or `CONTENTS_HIDDEN`. They are flagged `message.hidden`,
+never used as AI context or trigger, never replied to, their text is withheld from MCP reads, and any
+pending/scheduled reply targeting one is cancelled. Per user instruction they are **not logged at all**
+(silent skip). Limitation: Square (OpenChat) sync is not wired in this build, so the Square path is
+unit-tested only.
+
+### 5.6 AI provider and de-identification (t241u)
+
+Built-in AI = any OpenAI-compatible Chat Completions endpoint (base URL / model / key) plus an optional
+fallback chain (tried in order on error). `max_tokens_field` handles providers that need
+`max_completion_tokens` (OpenAI) vs `max_tokens` (others; auto-retry once on a 400 naming the field).
+Loopback base URLs (e.g. llama-server) need no key. De-identification (`ai_deidentify`, default ON, applied
+only to non-loopback URLs; port of anti-scam-helper `chat-training.mjs`, Apache-2.0): member names → 成員A…,
+phone numbers, e-mails, LINE IDs, URLs (except the 165 anti-fraud site), national ID, bank account and address patterns are masked before sending; names are restored in
+the reply. Also applied to the optional LLM scam judge.
 
 ## 6. Security fixes in this release (t233u)
 
@@ -112,7 +176,9 @@ MCP `add_scam_sample` can only add `SCAM` samples (cannot whitelist a pattern vi
 Tests: `test/security.test.ts` (crypto round-trip/tamper/AAD, migration wipes plaintext from db+WAL,
 wrong key refused, no key ⇒ exit 78, generated tokens + 127.0.0.1 bind, token-less/short-token/non-loopback
 refusal, 401s), `test/ai.test.ts` (whitelist gating, confirm queue, caps, active hours incl. overnight,
-kill switch, stickers, injection, connector mode, scam rules/warnings/mentions).
+kill switch, stickers, injection, connector mode, scam rules/warnings/mentions, trust state machine,
+MCP review tools + permission toggles, custom warning checks, trusted members / false positive, encrypted
+logs + CSV + retention, hidden messages, de-identification, fallback chain, max-tokens retry).
 
 ## 7. Known risks / items for the reviewer
 
@@ -137,7 +203,7 @@ kill switch, stickers, injection, connector mode, scam rules/warnings/mentions).
 ```
 cd app
 npm install
-npm test                 # 30 tests, offline, no LINE login, no real AI calls
+npm test                 # 36+ tests, offline, no LINE login, no real AI calls
 npm run typecheck
 npm run android:debug    # debug APKs with mock mode
 npm run android:release  # release APKs (mock purged, signed with ../keys/release.jks)
