@@ -120,7 +120,9 @@ export function buildMcpServer(ctx: ToolContext, hooks: BuildOptions = {}): McpS
 		const readOnly = READ_ONLY_TOOLS.has(name);
 		// ChatGPT 等用 annotations 判斷是否為寫入動作（寫入前會再問使用者）
 		const annotations = { readOnlyHint: readOnly, destructiveHint: !readOnly && !NON_DESTRUCTIVE_WRITE.has(name), openWorldHint: !readOnly, idempotentHint: readOnly };
-		server.registerTool(name, { description: def.description, inputSchema: def.schema, annotations }, async (args: Record<string, unknown>) => {
+		// ChatGPT：每個工具宣告需要的 OAuth scope（本機 Bearer 連線會忽略）
+		const _meta = { securitySchemes: [{ type: "oauth2", scopes: [readOnly ? "line.read" : "line.send"] }] };
+		server.registerTool(name, { description: def.description, inputSchema: def.schema, annotations, _meta }, async (args: Record<string, unknown>) => {
 			const t0 = Date.now();
 			try {
 				const result = await callTool(ctx, name, args, hooks.client);
