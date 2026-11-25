@@ -114,6 +114,7 @@ fun SettingsScreen(client: ControlClient) {
             } }) { Text("🔄 換一組新 token") }
             msg?.let { Text(it, color = Warn, fontSize = 13.sp) }
         }
+        ConnectorSection(client) { reason, f -> withAuth(reason, f) }
         Section("狀態") {
             Text("已讀回條：${if (info?.optString("read_receipts") == "blocked") "封鎖中" else info?.optString("read_receipts") ?: "-"}")
             Text("資料加密：${when (info?.optString("data_key")) { "keystore" -> "Android Keystore"; "ephemeral" -> "Mock（臨時金鑰）"; null, "" -> "-"; else -> info?.optString("data_key") }}")

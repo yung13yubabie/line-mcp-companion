@@ -13,7 +13,8 @@ import { PermissionDeniedError } from "../ai/policy.ts";
 import type { Audit } from "../ai/audit.ts";
 import { ChatNotAllowedError } from "../whitelist.ts";
 
-const timeArg = z.union([z.number(), z.string()]).optional().describe("epoch ms 或 ISO 8601");
+// 單一 type（string）比較好移植（Gemini function declarations 等只吃單一 type）；執行時也接受數字
+const timeArg = z.preprocess((v) => (typeof v === "number" ? String(v) : v), z.string().max(40)).optional().describe("ISO 8601 或 epoch ms（字串）");
 
 const TOOL_DEFS: Record<string, { description: string; schema: Record<string, z.ZodType> }> = {
 	list_allowed_chats: { description: "列出使用者勾選「允許 AI / MCP 存取」的會話。", schema: {} },
