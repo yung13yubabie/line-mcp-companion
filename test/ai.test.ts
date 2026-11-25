@@ -470,7 +470,8 @@ test("反詐信任成員 + 誤判；反詐紀錄 / AI 紀錄加密保存、可�
 	const alerts = scam.onNewMessages([{ chatId: G, id: "500", fromSelf: false }]);
 	warner.handle(alerts);
 	assert.equal(events.scamList({})[0]!.action, "queued");
-	const fp = (await callTool(ctx, "mark_scam_false_positive", { alert_id: alerts[0] })) as { trusted: boolean; cancelled: number };
+	store.setSetting("mcp_scam_trust", "on"); // M-4：使用者明確允許外部 AI 加信任成員
+	const fp = (await callTool(ctx, "mark_scam_false_positive", { alert_id: alerts[0], trust_member: true })) as { trusted: boolean; cancelled: number };
 	assert.equal(fp.trusted, true);
 	assert.equal(fp.cancelled, 1);
 	assert.equal(events.scamList({})[0]!.action, "false_positive");
@@ -652,6 +653,11 @@ test("日報貼文：手動 / MCP post_digest 走 Outbox（審核 → 確認佇�
 	const poster = new DigestPoster(store, digests, outbox, ctx.ai, () => clock.t);
 	const c = { ...ctx, poster };
 	const d = digests.save({ chat_id: A, period_start: T0 - 3600_000, period_end: T0 + 3600_000, title: "今日重點", items: [{ headline: "晚餐七點", body: "看這 https://line-verify.xyz/a 跟 reurl.cc/xyz", source_message_ids: ["1"] }], source: "test" }, "system");
+	// M-3：跨聊天要來源與目標都明確允許
+	await assert.rejects(callTool(c, "post_digest", { digest_id: d.id, target_chat: G }), /digest_target_not_allowed/);
+	store.setSetting(`digest_target:${G}`, "on");
+	await assert.rejects(callTool(c, "post_digest", { digest_id: d.id, target_chat: G }), /digest_source_not_shareable/);
+	store.setSetting(`digest_share:${A}`, "on");
 	// 預設：AI 關 → 拒絕；S 不在白名單 → 拒絕
 	await assert.rejects(callTool(c, "post_digest", { digest_id: d.id, target_chat: G }), /ai_disabled/);
 	await assert.rejects(callTool(c, "post_digest", { digest_id: d.id, target_chat: S }), /not allowed/);
@@ -671,6 +677,9 @@ test("日報貼文：手動 / MCP post_digest 走 Outbox（審核 → 確認佇�
 	// 自動：延遲後送
 	policy.setTrust(G, "ai", "auto");
 	policy.set(G, { delay_sec: 5 });
+	assert.equal(poster.post([d.id], G, "ui").route, "pending", "M-3：目標還是 suggest 模式 → 不自動貼");
+	outbox.supersede(G, ["digest"]);
+	policy.set(G, { mode: "auto" });
 	const r2 = poster.post([d.id], G, "ui");
 	assert.equal(r2.route, "scheduled");
 	clock.t += 6_000;

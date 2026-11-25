@@ -153,7 +153,7 @@ export class Outbox {
 		for (const mid of [input.replyTo, input.triggerId]) if (mid != null && this.store.isHidden(input.chatId, String(mid))) throw new Error("message_hidden: 這則訊息已被隱藏或收回，不能回覆");
 		if (text && [...text].length > MAX_TEXT) throw new Error(`text too long (max ${MAX_TEXT})`);
 		const flags = [...new Set(input.flags ?? [])];
-		const pending = input.forcePending || (input.trustOnly ? basic.cfg.confirm_send || flags.length > 0 : this.policy.needsConfirmation(basic.cfg, flags));
+		const pending = input.forcePending || (input.trustOnly ? basic.cfg.confirm_send || basic.cfg.mode !== "auto" || flags.length > 0 : this.policy.needsConfirmation(basic.cfg, flags));
 		const now = this.policy.clock.now();
 		let scheduled: number | null = null;
 		if (pending) {

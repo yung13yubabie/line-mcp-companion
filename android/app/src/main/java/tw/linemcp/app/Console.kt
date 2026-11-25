@@ -218,7 +218,7 @@ fun QueueScreen(client: ControlClient, onBack: () -> Unit) {
 
 fun originLabel(o: String) = when (o) { "mcp" -> "外部 AI（MCP）"; "auto" -> "自動代聊"; "suggest" -> "AI 建議"; "ui" -> "你自己"; "scam_warn" -> "反詐提醒"; else -> o }
 fun flagText(f: String) = f.split(",").joinToString("、") { when (it) {
-    "injection_suspected" -> "對方訊息像在下指令給 AI"; "url_in_output" -> "回覆裡有連結"; "contact_in_output" -> "回覆裡有電話／LINE ID／Email"; "prompt_contact" -> "圖片提示詞裡有網址或聯絡方式"; "mcp_first_send" -> "外部 AI 第一次傳到這個聊天，請確認"; "suspicious_output" -> "回覆內容怪怪的"; "unknown_sticker_dropped" -> "AI 想用你沒有的貼圖"
+    "injection_suspected" -> "對方訊息像在下指令給 AI"; "url_in_output" -> "回覆裡有連結"; "contact_in_output" -> "回覆裡有電話／LINE ID／Email"; "prompt_contact" -> "圖片提示詞裡有網址或聯絡方式"; "mcp_first_send" -> "外部 AI 第一次傳到這個聊天，請確認"; "mcp_written_digest" -> "外部 AI 寫的日報"; "suspicious_output" -> "回覆內容怪怪的"; "unknown_sticker_dropped" -> "AI 想用你沒有的貼圖"
     else -> if (it.startsWith("limited:")) "已到頻率上限" else it } }
 
 // ============================ AI 設定 ============================
@@ -375,6 +375,14 @@ fun ChatAiScreen(client: ControlClient, chatId: String, name: String, type: Stri
         Section("讀取連結", "聊天裡的網址：先過反詐 / 詐騙網域 / 短網址展開 / 內網檢查，安全才抓標題給摘要和日報用。預設關") {
             ToggleRow("在這個聊天讀取連結", c.optBoolean("link_read"), "不執行 JS、不帶 cookie、最多 512 KB、8 秒") { v ->
                 scope.launch { runCatching { client.post("/links/toggle", JSONObject().put("chat_id", chatId).put("on", v)) }.onFailure { msg = friendly(it) }; load() }
+            }
+        }
+        Section("日報分享", "日報預設只能貼回同一個聊天。要把這裡的日報貼到別的聊天，兩邊都要打開") {
+            ToggleRow("允許把這個聊天的日報貼到其他聊天", c.optBoolean("digest_share"), "私訊內容可能被貼到群組，請小心") { v ->
+                scope.launch { runCatching { client.post("/digests/share", JSONObject().put("chat_id", chatId).put("share", v)) }.onFailure { msg = friendly(it) }; load() }
+            }
+            ToggleRow("允許其他聊天的日報貼到這裡", c.optBoolean("digest_target")) { v ->
+                scope.launch { runCatching { client.post("/digests/share", JSONObject().put("chat_id", chatId).put("target", v)) }.onFailure { msg = friendly(it) }; load() }
             }
         }
         Section("回覆頻率", "就算是代聊也不要太勤快") {

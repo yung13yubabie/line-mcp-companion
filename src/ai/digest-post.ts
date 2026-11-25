@@ -68,8 +68,18 @@ export class DigestPoster {
 	post(digestIds: number[], targetChat: string, actor: Actor, opts: { respectWhitelist?: boolean; detail?: string } = {}): { item: OutboxItem; route: "pending" | "scheduled"; text: string } {
 		const ds = digestIds.map((id) => this.#digests.get(id, opts.respectWhitelist ?? false)).filter((d): d is Digest => !!d);
 		if (!ds.length) throw new Error("digest not_found");
+		// M-3：只能貼回來源聊天；要貼到別的聊天，來源要開「允許日報分享到其他聊天」、目標要開「允許接收日報」
+		for (const d of ds) {
+			if (!d.chats.length) throw new Error("digest_no_sources: 日報沒有來源訊息，不能貼出");
+			const cross = d.chats.filter((c) => c !== targetChat);
+			if (cross.length && this.#store.getSetting(`digest_target:${targetChat}`) !== "on") throw new Error("digest_target_not_allowed: 目標聊天沒有開「允許接收其他聊天的日報」");
+			const blocked = cross.filter((c) => this.#store.getSetting(`digest_share:${c}`) !== "on");
+			if (blocked.length) throw new Error(`digest_source_not_shareable: ${blocked.length} 個來源聊天沒有開「允許日報分享到其他聊天」`);
+		}
+		// MCP（外部 AI）寫入的日報內容不受來源約束 → 一律人工確認
+		const mcpWritten = ds.some((d) => d.source.startsWith("mcp"));
 		const text = renderDigest(ds, "（由 LINE MCP Companion 日報整理）");
-		const r = this.#outbox.enqueue({ chatId: targetChat, kind: "text", text, origin: "digest", originDetail: opts.detail ?? `digest:${digestIds.join(",")}`, trustOnly: true }, actor);
+		const r = this.#outbox.enqueue({ chatId: targetChat, kind: "text", text, origin: "digest", originDetail: opts.detail ?? `digest:${digestIds.join(",")}`, trustOnly: true, forcePending: mcpWritten, flags: mcpWritten ? ["mcp_written_digest"] : [] }, actor);
 		this.#outbox.audit.log(actor, "digest_post_queued", { chatId: targetChat, detail: { digests: digestIds, route: r.route } });
 		return { ...r, text };
 	}
@@ -125,10 +135,11 @@ export class DigestPoster {
 			if (!s.enabled || s.last_run_day === day || hhmm < s.time_hhmm) continue;
 			this.#store.db.prepare("UPDATE digest_schedule SET last_run_day=? WHERE id=?").run(day, s.id);
 			const start = Date.parse(`${day}T00:00:00+08:00`);
-			const sources = s.source_chats.length ? s.source_chats : null;
+			// M-3：沒指定來源 = 只用目標聊天自己的日報（不再是「任何日報」）
+			const sources = s.source_chats.length ? s.source_chats : [s.target_chat];
 			let list = this.#digests.list({ chatIds: sources, since: start, until: now, limit: 5 }).filter((d) => d.chats.every((c) => this.#store.getChat(c)?.allowed === 1));
 			if (!list.length && s.generate && this.#ai && this.#ai.driver === "builtin" && this.#ai.hasKey()) {
-				for (const c of (sources ?? []).slice(0, 5)) {
+				for (const c of sources.slice(0, 5)) {
 					try {
 						list.push(await this.#ai.generateDigest(c, start, now, "auto"));
 					} catch {
