@@ -8,7 +8,6 @@
  * - scope line.read 只註冊只讀工具；line.send 才有送出類工具（仍受 App 內所有關卡限制）
  */
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
-import { timingSafeEqual } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { buildMcpServer, TokenBucket, LOOPBACK } from "./server.ts";
@@ -16,6 +15,7 @@ import { OAuthServer, OAuthError, consentPage } from "./oauth.ts";
 import type { ToolContext } from "./tools.ts";
 import type { Store } from "../storage/db.ts";
 import type { Audit } from "../ai/audit.ts";
+import type { GatewayToken } from "./gateway-token.ts";
 
 export interface GatewayOptions {
 	host?: string;
@@ -23,8 +23,8 @@ export interface GatewayOptions {
 	store: Store;
 	oauth: OAuthServer;
 	audit?: Audit | null;
-	/** MCP 靜態 token（connector_allow_static=on 時可用） */
-	getStaticToken: () => string | undefined;
+	/** H-2：連接器專用靜態 token（與本機 MCP token 分開；預設關、預設只讀、30 天到期） */
+	gatewayToken: GatewayToken;
 	ratePerMin?: number;
 	sendRatePerMin?: number;
 	maxBodyBytes?: number;
@@ -38,7 +38,7 @@ export function connectorSettings(store: Store) {
 	return {
 		enabled: store.getSetting("connector_enabled") === "on",
 		public_url: store.getSetting("connector_public_url") ?? null,
-		allow_static: store.getSetting("connector_allow_static") !== "off",
+		allow_static: store.getSetting("connector_allow_static") === "on", // H-2：預設關
 	};
 }
 
@@ -108,12 +108,8 @@ export async function startGateway(ctx: ToolContext, opts: GatewayOptions): Prom
 			const c = oauth.client(info.client_id);
 			return { allowWrite: info.scope.includes("line.send"), client: `oauth:${c?.name ?? info.client_id}`.slice(0, 60) };
 		}
-		const st = opts.getStaticToken();
-		if (st && connectorSettings(store).allow_static) {
-			const a = Buffer.from(tok);
-			const b = Buffer.from(st);
-			if (a.length === b.length && timingSafeEqual(a, b)) return { allowWrite: true, client: "static-token" };
-		}
+		const g = opts.gatewayToken.verify(tok);
+		if (g) return { allowWrite: g.allowWrite, client: g.allowWrite ? "gateway-token:send" : "gateway-token:read" };
 		return null;
 	}
 

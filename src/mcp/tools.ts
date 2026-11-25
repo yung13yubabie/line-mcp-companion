@@ -57,7 +57,7 @@ export const FETCH_TOOLS = ["search", "fetch"] as const;
 
 /** 只讀工具：連接器（OAuth）只拿到 read scope 時只註冊這些 */
 export const READ_ONLY_TOOLS = new Set<string>([
-	"list_allowed_chats", "get_messages", "search_messages", "get_attachment", "download_media", "get_unread_summary", "get_sync_status", "trigger_sync",
+	"list_allowed_chats", "get_messages", "search_messages", "get_attachment", "download_media", "get_unread_summary", "get_sync_status",
 	"get_outbox_item", "list_stickers", "scan_scam_alerts", "list_scam_samples", "list_pending", "get_chat_trust", "get_ai_log", "get_scam_log", "search", "fetch", "list_digests", "get_digest", "read_link",
 ]);
 
