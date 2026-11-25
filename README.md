@@ -20,6 +20,8 @@
 - **長按訊息回覆這則**：引用回覆，可請 AI 擬一句，或回你用過的貼圖
 - **去 AI 味**：送出前把太像 AI 的句子改自然（Lieflat 規則，每個聊天可關）
 - **反詐雷達**：本機規則 + 可擴充範例庫，不需要 AI；可選擇在群組即時引用回覆提醒並 @ 管理員（每群預設關）
+- **日報**：AI 助理經 MCP 寫回、或 App 內建 AI 產生；報紙版面、選日期、點來源跳回原訊息；可手動或每天定時貼到群組（網址會拿掉）
+- **安全讀取連結**（每個聊天預設關）：先過反詐規則、詐騙網域、短網址展開、私有 IP 檢查才抓標題 / 文字，不執行 JS、不帶 cookie
 - **社群貼文草稿**：把聊天內容整理成你口吻的 FB / IG / Threads / X 草稿（只草稿，不發文）
 
 ## MCP 工具
@@ -31,6 +33,8 @@
 | 審核 | `list_pending` `edit_pending` `approve_pending`（要在 App 開「允許 MCP 核准」）`reject_pending` `get_chat_trust` `set_chat_trust`（升自動要在 App 開「允許 MCP 升級」）`get_ai_log` |
 | 反詐 | `scan_scam_alerts(since, chat_id?)` `list_scam_samples` `add_scam_sample` `compose_scam_warning` `mark_scam_false_positive` `trust_scam_member` `get_scam_log` |
 | ChatGPT 相容 | `search` `fetch`（只讀） |
+| 日報 | `save_digest` `list_digests` `get_digest` `delete_digest` `post_digest`（貼到群組，走確認佇列 / 信任狀態） |
+| 連結 | `read_link`（每個聊天預設關；反詐 / 短網址展開 / SSRF 防護，被擋回 `blocked: 原因`） |
 
 所有工具都只看得到白名單內的聊天；送出類預設進確認佇列，要你在 App 按「送出」。連接器設定見 [docs/connectors.md](docs/connectors.md)。
 

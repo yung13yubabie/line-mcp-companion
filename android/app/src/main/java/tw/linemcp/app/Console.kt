@@ -372,6 +372,11 @@ fun ChatAiScreen(client: ControlClient, chatId: String, name: String, type: Stri
             ToggleRow("去 AI 味", c.optBoolean("style_lieflat"), "送出前把太像 AI 的句子修自然一點（Lieflat 規則）") { patch(JSONObject().put("style_lieflat", it)) }
             ToggleRow("允許生成圖片並發送", c.optBoolean("allow_image")) { patch(JSONObject().put("allow_image", it)) }
         }
+        Section("讀取連結", "聊天裡的網址：先過反詐 / 詐騙網域 / 短網址展開 / 內網檢查，安全才抓標題給摘要和日報用。預設關") {
+            ToggleRow("在這個聊天讀取連結", c.optBoolean("link_read"), "不執行 JS、不帶 cookie、最多 512 KB、8 秒") { v ->
+                scope.launch { runCatching { client.post("/links/toggle", JSONObject().put("chat_id", chatId).put("on", v)) }.onFailure { msg = friendly(it) }; load() }
+            }
+        }
         Section("回覆頻率", "就算是代聊也不要太勤快") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 NumberField("間隔（秒）", c.optInt("min_interval_sec")) { patch(JSONObject().put("min_interval_sec", it)) }

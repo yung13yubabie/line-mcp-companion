@@ -49,6 +49,7 @@ export class MockSource implements LineSource {
 			m("9202", "c_mock_work", "u_mock_dev", 32, "MCP server 已經可以在手機上跑了"),
 			m("9203", "c_mock_work", ME, 35, "收到，我會準備 demo", {}),
 			m("9204", "c_mock_work", "u_mock_pm", 40, null, { contentType: "FILE", mediaName: "spec-v1.1.pdf", mediaSize: 2048, meta: { FILE_NAME: "spec-v1.1.pdf" } }),
+			m("9205", "c_mock_work", "u_mock_pm", 41, "線上版也放這：https://docs.example.com/project-a/spec-v1.1"),
 		],
 		u_mock_friend: [m("9301", "u_mock_friend", "u_mock_friend", 50, "晚點打球？"), m("9302", "u_mock_friend", ME, 51, "八點可以")],
 		c_mock_private: [m("9401", "c_mock_private", "u_mock_bank", 60, "（這個會話預設未勾選，MCP 看不到）")],
@@ -135,3 +136,13 @@ export function seedMockDigests(store: import("../storage/db.ts").Store, digests
 		"system",
 	);
 }
+
+/** Mock 連結讀取：不連網，固定回應（只在 debug / mock） */
+export const MOCK_LINK_PAGES: Record<string, { status: number; headers: Record<string, string>; body: string }> = {
+	"https://docs.example.com/project-a/spec-v1.1": {
+		status: 200,
+		headers: { "content-type": "text/html; charset=utf-8" },
+		body: `<title>專案 A 規格書 v1.1</title><meta name="description" content="sprint review 前的最新規格：新增 MCP 連接器與日報"><p>變更：1. 新增雲端連接器 2. 日報可定時貼到群組 3. 連結安全讀取</p><script>track()</script>`,
+	},
+	"https://reurl.cc/mOcK1": { status: 302, headers: { location: "https://tw-ezpost.com/verify?id=mock" }, body: "" },
+};

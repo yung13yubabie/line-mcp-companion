@@ -17,7 +17,7 @@ import { stripMentions, checkCustomWarning } from "../scam/warner.ts";
 import type { EventLog, AiEvent, ScamAction } from "../storage/event-log.ts";
 
 export type OutboxStatus = "pending" | "approved" | "sent" | "rejected" | "failed" | "expired";
-export type Origin = "auto" | "suggest" | "mcp" | "ui" | "scam_warn";
+export type Origin = "auto" | "suggest" | "mcp" | "ui" | "scam_warn" | "digest";
 
 export interface OutboxItem {
 	id: number;
@@ -60,6 +60,8 @@ export interface EnqueueInput {
 	flags?: string[];
 	/** 強制進確認佇列（例如「僅建議」） */
 	forcePending?: boolean;
+	/** 只看信任狀態（REVIEW/AUTO）與旗標決定要不要確認，不看代聊模式（日報貼文用） */
+	trustOnly?: boolean;
 }
 
 export class Outbox {
@@ -151,7 +153,7 @@ export class Outbox {
 		for (const mid of [input.replyTo, input.triggerId]) if (mid != null && this.store.isHidden(input.chatId, String(mid))) throw new Error("message_hidden: 這則訊息已被隱藏或收回，不能回覆");
 		if (text && [...text].length > MAX_TEXT) throw new Error(`text too long (max ${MAX_TEXT})`);
 		const flags = [...new Set(input.flags ?? [])];
-		const pending = input.forcePending || this.policy.needsConfirmation(basic.cfg, flags);
+		const pending = input.forcePending || (input.trustOnly ? basic.cfg.confirm_send || flags.length > 0 : this.policy.needsConfirmation(basic.cfg, flags));
 		const now = this.policy.clock.now();
 		let scheduled: number | null = null;
 		if (pending) {

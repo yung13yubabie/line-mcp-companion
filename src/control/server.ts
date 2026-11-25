@@ -6,6 +6,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { OAuthServer } from "../mcp/oauth.ts";
 import type { DigestStore } from "../storage/digests.ts";
+import type { DigestPoster } from "../ai/digest-post.ts";
+import { type LinkReader, extractUrls } from "../links/reader.ts";
 import type { QuickTunnel } from "../mcp/tunnel.ts";
 import { connectorSettings, normalizePublicUrl } from "../mcp/gateway.ts";
 import { timingSafeEqual } from "node:crypto";
@@ -51,6 +53,8 @@ export interface ControlDeps {
 	stickerImage?: (stickerId: string) => Promise<{ bytes: Uint8Array; mime: string }>;
 	syncStatus?: () => Record<string, unknown> | null;
 	digests?: DigestStore | null;
+	poster?: DigestPoster | null;
+	links?: LinkReader | null;
 	/** 雲端連接器（OAuth 閘道 + 通道） */
 	connector?: {
 		oauth: OAuthServer;
@@ -132,6 +136,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 		admins: deps.scam?.admins(cfg.chat_id) ?? [],
 		trust: { ai: cfg.ai_trust, scam: deps.ai?.policy.trust(cfg.chat_id, "scam") ?? "review" },
 		trust_log: deps.ai?.policy.trustLog(10, cfg.chat_id) ?? [],
+		link_read: store.getSetting(`link_read:${cfg.chat_id}`) === "on",
 	});
 	const logFilter = (url: URL) => {
 		const q = url.searchParams;
@@ -449,6 +454,58 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			} catch (e) {
 				throw new HttpError(e instanceof PermissionDeniedError ? 403 : 400, (e as Error).message);
 			}
+		},
+
+		"POST /control/digests/post": async (_u, req) => {
+			const b = await body(req);
+			const p = need(deps.poster, "digest posting");
+			const ids = (Array.isArray(b.ids) ? b.ids : [b.id]).map(Number).filter((n) => Number.isFinite(n));
+			try {
+				const r = p.post(ids, String(b.target_chat ?? ""), "ui");
+				return { outbox_id: r.item.id, status: r.item.status, route: r.route, text: r.text };
+			} catch (e) {
+				throw new HttpError(e instanceof PermissionDeniedError ? 403 : 400, (e as Error).message);
+			}
+		},
+		"GET /control/digests/schedules": () => {
+			const p = need(deps.poster, "digest posting");
+			return { schedules: p.schedules().map((s) => ({ ...s, target_name: store.getChat(s.target_chat)?.name ?? s.target_chat })) };
+		},
+		"POST /control/digests/schedules": async (_u, req) => {
+			const b = await body(req);
+			const p = need(deps.poster, "digest posting");
+			if (b.delete) return { ok: p.deleteSchedule(Number(b.id), "ui") };
+			try {
+				return p.saveSchedule(
+					{ id: b.id ? Number(b.id) : undefined, target_chat: String(b.target_chat ?? ""), source_chats: Array.isArray(b.source_chats) ? b.source_chats.map(String) : [], time_hhmm: String(b.time_hhmm ?? ""), enabled: b.enabled !== false, generate: !!b.generate },
+					"ui",
+				);
+			} catch (e) {
+				throw new HttpError(400, (e as Error).message);
+			}
+		},
+
+		// ---- 讀取連結 ----
+		"POST /control/links/toggle": async (_u, req) => {
+			const b = await body(req);
+			const chatId = String(b.chat_id ?? "");
+			if (!store.getChat(chatId)) throw new HttpError(404, "chat not found");
+			store.setSetting(`link_read:${chatId}`, b.on ? "on" : "off");
+			deps.ai?.audit.log("ui", "link_read_toggled", { chatId, detail: { on: !!b.on } });
+			return { ok: true, on: !!b.on };
+		},
+		"POST /control/links/read": async (_u, req) => {
+			const b = await body(req);
+			const reader = need(deps.links, "link reading");
+			const chatId = String(b.chat_id ?? "");
+			const m = store.getMessage(chatId, String(b.message_id ?? ""));
+			if (!m) throw new HttpError(404, "message not found");
+			if (m.hidden) throw new HttpError(400, "message_hidden");
+			if (store.getSetting(`link_read:${chatId}`) !== "on") return { results: [], blocked: "link_reading_off" };
+			const results = [];
+			for (const u of extractUrls(m.text).slice(0, 3)) results.push(await reader.read(u));
+			deps.ai?.audit.log("ui", "read_link", { chatId, detail: { n: results.length, blocked: results.filter((r) => !r.ok).map((r) => r.blocked) } });
+			return { results };
 		},
 
 		// ---- 雲端連接器 ----

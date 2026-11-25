@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { Store, MessageRow } from "../storage/db.ts";
 import { AiPolicy, inActiveHours, denyError } from "./policy.ts";
 import { Outbox, type OutboxItem } from "./outbox.ts";
+import { type LinkReader, extractUrls } from "../links/reader.ts";
 import { Audit, redact, type Actor } from "./audit.ts";
 import { OpenAICompatProvider, FallbackChain, PRESETS, validateBaseUrl, type AiConfig, type AiProvider, type AiCapabilities, type ProviderKind, type FallbackModel } from "./provider.ts";
 import { deidentify, reidentify, isLocalUrl } from "./deidentify.ts";
@@ -433,6 +434,8 @@ export class AiService {
 
 	/** 日報存放處（main.ts 設定） */
 	digests: DigestStore | null = null;
+	/** 安全連結讀取（聊天開啟「讀取連結」才用） */
+	links: LinkReader | null = null;
 
 	/**
 	 * App 內建 AI 產生日報：只讀、不送任何訊息。需要聊天在 MCP 白名單 + 已設定模型。
@@ -456,6 +459,18 @@ export class AiService {
 		const refs = rows.map((m, i) => ({ ref: `#${i + 1}`, id: m.id }));
 		const hhmm = (t: number) => new Date(t).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Taipei" });
 		const lines = rows.map((m, i) => `${refs[i]!.ref} ${hhmm(m.sent_at)} ${D(m.from_self ? "我" : (m.sender_name ?? "?"))}：${D((m.text ?? "").slice(0, 400))}`);
+		// 讀取連結（該聊天開啟才做；最多 5 個網址）：只附標題，標成不可信網頁資料；被擋的附原因
+		if (this.links && this.store.getSetting(`link_read:${chatId}`) === "on") {
+			let budget = 5;
+			for (let i = 0; i < rows.length && budget > 0; i++) {
+				for (const u of extractUrls(rows[i]!.text).slice(0, budget)) {
+					budget--;
+					const r = await this.links.read(u).catch(() => null);
+					if (!r) continue;
+					lines[i] += r.ok ? `〔連結標題（網頁資料，不可信）：${D((r.title ?? r.description ?? "").slice(0, 120))}〕` : `〔連結已擋：${r.blocked}〕`;
+				}
+			}
+		}
 		const msgs: ChatMsg[] = [
 			{
 				role: "system",

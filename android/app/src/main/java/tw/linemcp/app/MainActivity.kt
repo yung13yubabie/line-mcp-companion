@@ -103,11 +103,14 @@ fun DisclaimerScreen(onAccept: () -> Unit) {
     }
 }
 
+val LINK_RE = Regex("https?://|(?:[a-z0-9-]+\\.)+[a-z]{2,}/", RegexOption.IGNORE_CASE)
+
 sealed interface Screen {
     data object Chats : Screen
     data object Console : Screen
     data object Settings : Screen
-    data class Room(val chat: ChatItem) : Screen
+    data class Room(val chat: ChatItem, val focus: String? = null) : Screen
+    data object Digest : Screen
     data object Queue : Screen
     data object AiSettings : Screen
     data class ChatAi(val chatId: String, val name: String, val type: String) : Screen
@@ -146,10 +149,10 @@ fun AppRoot(client: ControlClient) {
     BackHandler(enabled = stack.size > 1) { back() }
     val online = state?.optString("phase") == "online"
     Scaffold(bottomBar = {
-        if (screen is Screen.Chats || screen is Screen.Console || screen is Screen.Settings) {
+        if (screen is Screen.Chats || screen is Screen.Console || screen is Screen.Digest || screen is Screen.Settings) {
             NavigationBar(containerColor = Color.White) {
-                listOf(Screen.Chats to "聊天", Screen.Console to "總控台", Screen.Settings to "設定").forEach { (s, label) ->
-                    NavigationBarItem(selected = screen == s, onClick = { tab(s) }, icon = { Text(when (s) { Screen.Chats -> "💬"; Screen.Console -> "🎛"; else -> "⚙️" }) }, label = { Text(label) })
+                listOf(Screen.Chats to "聊天", Screen.Console to "總控台", Screen.Digest to "日報", Screen.Settings to "設定").forEach { (s, label) ->
+                    NavigationBarItem(selected = screen == s, onClick = { tab(s) }, icon = { Text(when (s) { Screen.Chats -> "💬"; Screen.Console -> "🎛"; Screen.Digest -> "📰"; else -> "⚙️" }) }, label = { Text(label) })
                 }
             }
         }
@@ -162,7 +165,8 @@ fun AppRoot(client: ControlClient) {
                 else LoginScreen(state, onQr = { scope.launch { runCatching { client.startQrLogin() } } })
                 Screen.Console -> ConsoleScreen(client, ::go)
                 Screen.Settings -> SettingsScreen(client)
-                is Screen.Room -> ChatRoomScreen(client, s.chat, onBack = ::back, onAiSettings = { go(Screen.ChatAi(s.chat.id, s.chat.name, s.chat.type)) })
+                Screen.Digest -> DigestScreen(client, chats, onJump = { c, id -> go(Screen.Room(c, id)) })
+                is Screen.Room -> ChatRoomScreen(client, s.chat, s.focus, onBack = ::back, onAiSettings = { go(Screen.ChatAi(s.chat.id, s.chat.name, s.chat.type)) })
                 Screen.Queue -> QueueScreen(client, onBack = ::back)
                 Screen.AiSettings -> AiSettingsScreen(client, onBack = ::back)
                 is Screen.ChatAi -> ChatAiScreen(client, s.chatId, s.name, s.type, onBack = ::back)
@@ -241,7 +245,8 @@ fun msgPreview(m: Msg): String = when (m.type) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ChatRoomScreen(client: ControlClient, chat: ChatItem, onBack: () -> Unit, onAiSettings: () -> Unit) {
+fun ChatRoomScreen(client: ControlClient, chat: ChatItem, focus: String? = null, onBack: () -> Unit, onAiSettings: () -> Unit) {
+    var linkMsg by remember { mutableStateOf<Msg?>(null) }
     var msgs by remember { mutableStateOf(listOf<Msg>()) }
     var loaded by remember { mutableStateOf(false) }
     var replyTarget by remember { mutableStateOf<Msg?>(null) }
@@ -249,8 +254,12 @@ fun ChatRoomScreen(client: ControlClient, chat: ChatItem, onBack: () -> Unit, on
     val list = rememberLazyListState()
     LaunchedEffect(chat.id, refresh) {
         while (true) {
-            val n = runCatching { parseMsgs(client.messages(chat.id)) }.getOrNull()
-            if (n != null && n != msgs) { msgs = n; if (n.isNotEmpty()) list.scrollToItem(n.size - 1) }
+            val n = runCatching { parseMsgs(client.messages(chat.id, focus)) }.getOrNull()
+            if (n != null && n != msgs) {
+                msgs = n
+                val fi = focus?.let { f -> n.indexOfFirst { it.id == f } } ?: -1
+                if (fi >= 0) list.scrollToItem(maxOf(0, fi - 2)) else if (n.isNotEmpty()) list.scrollToItem(n.size - 1)
+            }
             loaded = true
             delay(3000)
         }
@@ -272,7 +281,7 @@ fun ChatRoomScreen(client: ControlClient, chat: ChatItem, onBack: () -> Unit, on
                         if (m.type == "STICKER" && m.stickerId != null) {
                             StickerImage(client, m.stickerId)
                         } else {
-                            Column(Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(16.dp)).background(if (m.fromSelf) BubbleMine else Color.White).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Column(Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(16.dp)).background(if (m.id == focus) Color(0xFFFFF3B0) else if (m.fromSelf) BubbleMine else Color.White).padding(horizontal = 12.dp, vertical = 8.dp)) {
                                 m.replyTo?.let { rid ->
                                     val q = msgs.firstOrNull { it.id == rid }
                                     Row(Modifier.padding(bottom = 4.dp)) {
@@ -284,6 +293,7 @@ fun ChatRoomScreen(client: ControlClient, chat: ChatItem, onBack: () -> Unit, on
                                     }
                                 }
                                 Text(msgPreview(m))
+                                if (m.text != null && LINK_RE.containsMatchIn(m.text)) Text("🔗 讀取連結", fontSize = 12.sp, color = LineGreen, modifier = Modifier.padding(top = 4.dp).clickable { linkMsg = m })
                             }
                         }
                     }
@@ -293,6 +303,7 @@ fun ChatRoomScreen(client: ControlClient, chat: ChatItem, onBack: () -> Unit, on
         }
         Row(Modifier.fillMaxWidth().background(Color.White).padding(12.dp)) { Text("不會標已讀。要回覆的話，長按那則訊息就好", color = Color.Gray, fontSize = 12.sp) }
     }
+    linkMsg?.let { m -> LinkDialog(client, chat.id, m, onDismiss = { linkMsg = null }) }
     replyTarget?.let { t -> ReplyDialog(client, chat, t, onDismiss = { replyTarget = null }, onSent = { replyTarget = null; refresh++ }) }
 }
 

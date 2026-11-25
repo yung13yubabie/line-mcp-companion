@@ -37,6 +37,8 @@ import { ScamDetector } from "./scam/detector.ts";
 import { ScamWarner } from "./scam/warner.ts";
 import { OAuthServer } from "./mcp/oauth.ts";
 import { DigestStore } from "./storage/digests.ts";
+import { DigestPoster } from "./ai/digest-post.ts";
+import { LinkReader } from "./links/reader.ts";
 import { startGateway, normalizePublicUrl } from "./mcp/gateway.ts";
 import { QuickTunnel } from "./mcp/tunnel.ts";
 
@@ -100,9 +102,12 @@ scam.log = events;
 warner.events = events;
 const digests = new DigestStore(store, dataKey.box, whitelist);
 ai.digests = digests;
+const links = new LinkReader({ getSafeBrowsingKey: () => process.env.LMA_SAFE_BROWSING_KEY || undefined, getBlocklist: () => (store.getSetting("link_blocklist") ?? "").split(/[\s,]+/).filter(Boolean) });
+ai.links = links;
+const poster = new DigestPoster(store, digests, outbox, ai);
 events.prune();
 
-const ctx: ToolContext = { store, whitelist, sync: null, media: new MediaCache(home, store, null), ai, scam, warner, events, digests };
+const ctx: ToolContext = { store, whitelist, sync: null, media: new MediaCache(home, store, null), ai, scam, warner, events, digests, poster, links };
 
 function attachSync(sync: SyncEngine): void {
 	sync.onNewMessages = (msgs) => {
@@ -152,7 +157,9 @@ async function pollLoop(): Promise<void> {
 
 async function goMockOnline(): Promise<void> {
 	if (process.env.LMA_INCLUDE_MOCK === "0" || !mockAi) return;
-	const { MockSource, MOCK_DEFAULT_ALLOWED, MOCK_AI_ALLOWED, seedMockDigests } = await import("./mock/mock-source.ts");
+	const { MockSource, MOCK_DEFAULT_ALLOWED, MOCK_AI_ALLOWED, seedMockDigests, MOCK_LINK_PAGES } = await import("./mock/mock-source.ts");
+	// mock：連結讀取不連網
+	links.useOffline(MOCK_LINK_PAGES);
 	const src = new MockSource();
 	state = { phase: "online", profile: { displayName: "Mock 使用者", mid: "u_mock_me" } };
 	ctx.sync = new SyncEngine(store, src);
@@ -179,6 +186,9 @@ async function goMockOnline(): Promise<void> {
 		// 日報示範（只在 mock）
 		try {
 			seedMockDigests(store, digests);
+			store.setSetting("link_read:c_mock_work", "on");
+			store.setSetting("link_read:c_mock_hood", "on");
+			poster.saveSchedule({ target_chat: "c_mock_work", source_chats: ["c_mock_work", "c_mock_hood"], time_hhmm: "21:00", generate: true }, "system");
 		} catch (e) {
 			console.error("mock digests:", (e as Error).message);
 		}
@@ -240,6 +250,8 @@ const control = await startControlHttp(
 		warner,
 		events,
 		digests,
+		poster,
+		links,
 		setAiKey: (k) => void (aiKey = k ?? undefined),
 		mcpStats: () => mcpStats?.() ?? null,
 		rotateMcpToken: () => (mcpToken = genToken()),
@@ -273,6 +285,8 @@ setInterval(() => {
 	outbox.expireStale();
 	void outbox.processDue().catch((e) => console.error("processDue:", (e as Error).message));
 }, 5_000).unref?.();
+// 日報定時貼文（台北時間，每分鐘檢查）
+setInterval(() => void poster.tick().catch((e) => console.error("digest tick:", (e as Error).message)), 60_000).unref?.();
 setInterval(() => events.prune(), 3_600_000).unref?.();
 
 for (const sig of ["SIGTERM", "SIGINT"] as const)

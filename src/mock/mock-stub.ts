@@ -9,3 +9,5 @@ export const MOCK_AI_ALLOWED: string[] = [];
 export function seedMockDigests(): void {
 	throw new Error("mock mode is not available in release builds");
 }
+
+export const MOCK_LINK_PAGES: Record<string, { status: number; headers: Record<string, string>; body: string }> = {};

@@ -293,4 +293,16 @@ CREATE TABLE IF NOT EXISTS digest (
   body_enc      TEXT    NOT NULL   -- enc:v1:… JSON {title, items}
 );
 CREATE INDEX IF NOT EXISTS digest_period ON digest(period_end);
+
+-- 日報定時貼到群組
+CREATE TABLE IF NOT EXISTS digest_schedule (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_chat   TEXT    NOT NULL,
+  source_chats  TEXT    NOT NULL,  -- JSON array；空 = 所有白名單聊天
+  time_hhmm     TEXT    NOT NULL,  -- 台北時間 HH:MM
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  generate      INTEGER NOT NULL DEFAULT 0, -- 沒有日報時用 App AI 先產生
+  last_run_day  TEXT,
+  created_at    INTEGER NOT NULL
+);
 `;

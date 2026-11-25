@@ -23,6 +23,8 @@ import { EventLog } from "../src/storage/event-log.ts";
 import { SecretBox } from "../src/storage/secret-box.ts";
 import { randomBytes } from "node:crypto";
 import { DigestStore, plainText } from "../src/storage/digests.ts";
+import { DigestPoster } from "../src/ai/digest-post.ts";
+import { LinkReader } from "../src/links/reader.ts";
 
 const ME = "u_me";
 const A = "u_alice";
@@ -640,3 +642,59 @@ test("日報：MCP 寫回（驗證來源屬於該聊天、白名單、去 HTML�
 async function ai_generate(ctx: { ai?: AiService | null }, chat: string) {
 	return ctx.ai!.generateDigest(chat, T0 - 3600_000, T0 + 3600_000, "ui");
 }
+
+test("日報貼文：手動 / MCP post_digest 走 Outbox（審核 → 確認佇列；自動 → 延遲送），去網址；目標要在白名單 + 代聊名單；每天定時一次", async () => {
+	const { ctx, store, digests, policy, outbox, sender, clock, audit } = setup();
+	const poster = new DigestPoster(store, digests, outbox, ctx.ai, () => clock.t);
+	const c = { ...ctx, poster };
+	const d = digests.save({ chat_id: A, period_start: T0 - 3600_000, period_end: T0 + 3600_000, title: "今日重點", items: [{ headline: "晚餐七點", body: "看這 https://line-verify.xyz/a 跟 reurl.cc/xyz", source_message_ids: ["1"] }], source: "test" }, "system");
+	// 預設：AI 關 → 拒絕；S 不在白名單 → 拒絕
+	await assert.rejects(callTool(c, "post_digest", { digest_id: d.id, target_chat: G }), /ai_disabled/);
+	await assert.rejects(callTool(c, "post_digest", { digest_id: d.id, target_chat: S }), /not allowed/);
+	policy.setAiEnabled(true);
+	await assert.rejects(callTool(c, "post_digest", { digest_id: d.id, target_chat: G }), /ai_not_allowed/, "目標要在 AI 代聊名單");
+	policy.set(G, { ai_allowed: true, mode: "suggest" });
+	const r = (await callTool(c, "post_digest", { digest_id: d.id, target_chat: G })) as { route: string; text: string; outbox_id: number };
+	assert.equal(r.route, "pending", "審核狀態 → 進確認佇列");
+	assert.ok(!r.text.includes("line-verify") && !r.text.includes("reurl.cc") && r.text.includes("［連結］"), "網址不轉貼");
+	assert.equal(outbox.get(r.outbox_id)!.origin, "digest");
+	await outbox.processDue();
+	assert.equal(sender.sent.length, 0);
+	// 白名單移除後 MCP 看不到該日報
+	store.db.prepare("UPDATE chat SET allowed=0 WHERE id=?").run(A);
+	await assert.rejects(callTool(c, "post_digest", { digest_id: d.id, target_chat: G }), /not_found/);
+	store.db.prepare("UPDATE chat SET allowed=1 WHERE id=?").run(A);
+	// 自動：延遲後送
+	policy.setTrust(G, "ai", "auto");
+	policy.set(G, { delay_sec: 5 });
+	const r2 = poster.post([d.id], G, "ui");
+	assert.equal(r2.route, "scheduled");
+	clock.t += 6_000;
+	await outbox.processDue();
+	assert.equal(sender.sent.length, 1);
+	// 排程：驗證、每天一次
+	assert.throws(() => poster.saveSchedule({ target_chat: G, time_hhmm: "25:00" }, "ui"), /HH:MM/);
+	assert.throws(() => poster.saveSchedule({ target_chat: S, time_hhmm: "08:00" }, "ui"), /whitelist/);
+	assert.throws(() => poster.saveSchedule({ target_chat: G, source_chats: [S], time_hhmm: "08:00" }, "ui"), /not whitelisted/);
+	policy.set(G, { min_interval_sec: 0 });
+	const s = poster.saveSchedule({ target_chat: G, source_chats: [A], time_hhmm: "09:00" }, "ui");
+	clock.t = T0 + 3600_000 + 60_000; // 台北 11:01
+	assert.equal(await poster.tick(), 1);
+	assert.equal(await poster.tick(), 0, "同一天不重送");
+	assert.equal(poster.schedules()[0]!.last_run_day, "2026-11-24");
+	assert.ok(poster.deleteSchedule(s.id, "ui"));
+	assert.ok(audit.recent({ limit: 50 }).some((e) => e.action === "digest_post_queued"));
+});
+
+test("read_link（MCP）：每聊天預設關、白名單、隱藏訊息拒絕、詐騙網域回 blocked 不連網", async () => {
+	const { ctx, store } = setup();
+	const c = { ...ctx, links: new LinkReader({ resolve: async () => { throw new Error("should not resolve"); } }) };
+	store.insertMessage({ chatId: G, id: "L1", senderMid: "u_bob", fromSelf: false, sentAt: T0, contentType: "NONE", text: "包裹驗證 https://line-login.top/v?id=1 快點" });
+	store.insertMessage({ chatId: G, id: "L2", senderMid: "u_bob", fromSelf: false, sentAt: T0, contentType: "NONE", text: "此訊息已被隱藏。" });
+	assert.deepEqual(((await callTool(c, "read_link", { chat_id: G, message_id: "L1" })) as { blocked: string }).blocked, "link_reading_off");
+	await assert.rejects(callTool(c, "read_link", { chat_id: S, message_id: "9" }), /not allowed/);
+	store.setSetting(`link_read:${G}`, "on");
+	const r = (await callTool(c, "read_link", { chat_id: G, message_id: "L1" })) as { results: { blocked: string }[] };
+	assert.equal(r.results[0]!.blocked, "blocked: known_scam_domain");
+	await assert.rejects(callTool(c, "read_link", { chat_id: G, message_id: "L2" }), /hidden/);
+});

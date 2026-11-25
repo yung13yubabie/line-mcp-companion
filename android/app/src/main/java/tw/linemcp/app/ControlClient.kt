@@ -60,7 +60,7 @@ class ControlClient(private val token: String, private val base: String = "http:
     suspend fun startQrLogin() = postObj("/login/qr")
     suspend fun chats() = getArr("/chats")
     suspend fun info() = getObj("/info")
-    suspend fun messages(chatId: String) = getArr("/messages?chat_id=" + enc(chatId) + "&limit=100")
+    suspend fun messages(chatId: String, around: String? = null) = getArr("/messages?chat_id=" + enc(chatId) + "&limit=100" + (around?.let { "&around=" + enc(it) } ?: ""))
     suspend fun setAllowed(chatId: String, allowed: Boolean) = post("/chats/allow", JSONObject().put("chat_id", chatId).put("allowed", allowed))
 
     companion object { fun enc(s: String): String = URLEncoder.encode(s, "UTF-8") }

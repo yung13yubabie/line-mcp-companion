@@ -6,6 +6,13 @@
 import { readFileSync } from "node:fs";
 import type { Store, MessageRow } from "../storage/db.ts";
 import type { DigestStore, Digest } from "../storage/digests.ts";
+import type { DigestPoster } from "../ai/digest-post.ts";
+import { type LinkReader, extractUrls } from "../links/reader.ts";
+
+/** 每個聊天的「讀取連結」開關（預設關） */
+export function linkReadingOn(store: Store, chatId: string): boolean {
+	return store.getSetting(`link_read:${chatId}`) === "on";
+}
 import { Whitelist } from "../whitelist.ts";
 import type { SyncEngine } from "../sync/engine.ts";
 import type { MediaCache } from "../media/cache.ts";
@@ -28,6 +35,8 @@ export interface ToolContext {
 	warner?: ScamWarner | null;
 	events?: EventLog | null;
 	digests?: DigestStore | null;
+	poster?: DigestPoster | null;
+	links?: LinkReader | null;
 }
 
 /** 進階工具：會送出訊息或呼叫 AI。全部受「MCP 白名單 + AI 代聊白名單 + 模式 + kill switch + 上限」控制。 */
@@ -38,7 +47,7 @@ export const REVIEW_TOOLS = ["list_pending", "edit_pending", "approve_pending", 
 export const SCAM_TOOLS = ["scan_scam_alerts", "list_scam_samples", "add_scam_sample", "compose_scam_warning", "mark_scam_false_positive", "trust_scam_member", "get_scam_log"] as const;
 
 /** 日報：AI 把整理好的重點寫回 App（內容加密保存、只限白名單） */
-export const DIGEST_TOOLS = ["save_digest", "list_digests", "get_digest", "delete_digest"] as const;
+export const DIGEST_TOOLS = ["save_digest", "list_digests", "get_digest", "delete_digest", "post_digest", "read_link"] as const;
 
 /** ChatGPT 相容的 search / fetch（只讀） */
 export const FETCH_TOOLS = ["search", "fetch"] as const;
@@ -46,7 +55,7 @@ export const FETCH_TOOLS = ["search", "fetch"] as const;
 /** 只讀工具：連接器（OAuth）只拿到 read scope 時只註冊這些 */
 export const READ_ONLY_TOOLS = new Set<string>([
 	"list_allowed_chats", "get_messages", "search_messages", "get_attachment", "download_media", "get_unread_summary", "get_sync_status", "trigger_sync",
-	"get_outbox_item", "list_stickers", "scan_scam_alerts", "list_scam_samples", "list_pending", "get_chat_trust", "get_ai_log", "get_scam_log", "search", "fetch", "list_digests", "get_digest",
+	"get_outbox_item", "list_stickers", "scan_scam_alerts", "list_scam_samples", "list_pending", "get_chat_trust", "get_ai_log", "get_scam_log", "search", "fetch", "list_digests", "get_digest", "read_link",
 ]);
 
 export const BASIC_TOOLS = [
@@ -482,6 +491,31 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 			const d = need(ctx.digests, "digests").get(Number(args.id), true);
 			if (!d) throw new Error("not_found");
 			return digestView(d, false);
+		}
+
+		case "post_digest": {
+			const poster = need(ctx.poster, "digest posting");
+			const target = String(args.target_chat ?? "");
+			whitelist.assert(target);
+			const r = poster.post([Number(args.digest_id)], target, "mcp", { respectWhitelist: true, detail: `mcp:${client ?? "connector"}` });
+			return { outbox_id: r.item.id, status: r.item.status, route: r.route, text: r.text, note: r.route === "pending" ? "在確認佇列等使用者核准（目標聊天的信任狀態是審核）" : "已排程送出" };
+		}
+
+		case "read_link": {
+			const reader = need(ctx.links, "link reading");
+			const chatId = String(args.chat_id ?? "");
+			whitelist.assert(chatId);
+			if (!linkReadingOn(store, chatId)) return { blocked: "link_reading_off", note: "使用者沒有在這個聊天開啟「讀取連結」" };
+			const m = store.getMessage(chatId, String(args.message_id ?? ""));
+			if (!m) throw new Error("message not found");
+			if (m.hidden) throw new Error("message_hidden");
+			const urls = extractUrls(m.text);
+			if (!urls.length) return { results: [], note: "no links in this message" };
+			const pick = args.index === undefined ? urls.slice(0, 3) : [urls[Number(args.index)]].filter((u): u is string => !!u);
+			const results = [];
+			for (const u of pick) results.push(await reader.read(u));
+			ctx.ai?.audit.log("mcp", "read_link", { chatId, detail: { n: results.length, blocked: results.filter((r) => !r.ok).map((r) => r.blocked), client } });
+			return { results: results.map((r) => (r.ok ? r : { url: r.url, final_url: r.final_url, blocked: `blocked: ${r.blocked}` })) };
 		}
 
 		case "delete_digest": {

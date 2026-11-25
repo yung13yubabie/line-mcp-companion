@@ -32,7 +32,7 @@ export interface GatewayOptions {
 
 /** 允許帶 Origin 打 /mcp 的來源（雲端用戶端的網頁 / MCP Inspector） */
 const MCP_ORIGINS = new Set(["https://chatgpt.com", "https://chat.openai.com", "https://claude.ai", "https://grok.com", "https://gemini.google.com", "http://localhost:6274", "http://127.0.0.1:6274"]);
-const SEND_SET = new Set<string>(["send_message", "generate_and_send_image", "approve_pending", "set_chat_trust", "compose_scam_warning"]);
+const SEND_SET = new Set<string>(["post_digest", "send_message", "generate_and_send_image", "approve_pending", "set_chat_trust", "compose_scam_warning"]);
 
 export function connectorSettings(store: Store) {
 	return {
