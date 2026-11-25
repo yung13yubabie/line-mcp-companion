@@ -14,13 +14,29 @@ android {
         versionCode = 1
         versionName = "0.1.0"
     }
+    // 正式簽章：keystore 放在 repo 外（預設 ../../../keys/release.jks，密碼在權限 0600 的檔案）。
+    // 可用環境變數 LMA_KEYSTORE / LMA_KEYSTORE_PASS_FILE 覆寫。找不到就不簽（release 建置會失敗，不會退回 debug 金鑰）。
+    val ksFile = file(System.getenv("LMA_KEYSTORE") ?: "${rootDir}/../../keys/release.jks")
+    val ksPassFile = file(System.getenv("LMA_KEYSTORE_PASS_FILE") ?: "${rootDir}/../../keys/keystore.pass")
+    signingConfigs {
+        if (ksFile.exists() && ksPassFile.exists()) {
+            create("release") {
+                val pass = ksPassFile.readText().trim()
+                storeFile = ksFile
+                storePassword = pass
+                keyAlias = "lma-release"
+                keyPassword = pass
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // 側載測試用：先以 debug 金鑰簽章。正式發佈前改成自己的 keystore。
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {
@@ -52,5 +68,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.zxing:core:3.5.3")        // 把 LINE QR URL 畫成 QR 圖
-    implementation("androidx.security:security-crypto:1.1.0-alpha06") // token 加密保存
+    implementation("androidx.security:security-crypto:1.1.0-alpha06") // token / 資料金鑰加密保存
+    implementation("androidx.biometric:biometric:1.1.0")                // 顯示 / 複製 token 前驗證本人
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
 }

@@ -55,6 +55,9 @@ class NodeService : Service() {
                     put("LINE_MCP_TOKEN", Secrets.mcpToken(this@NodeService))
                     put("LINE_CONTROL_PORT", "47824")
                     put("LINE_CONTROL_TOKEN", Secrets.controlToken(this@NodeService))
+                    // SQLite 靜態加密用的資料金鑰（Keystore 保護）；Node 讀到後立即從環境變數刪除
+                    put("LMA_DATA_KEY", Secrets.dataKeyB64(this@NodeService))
+                    Secrets.aiKey(this@NodeService)?.let { put("LMA_AI_KEY", it) }
                     put("HOME", filesDir.absolutePath)
                     if (MockMode.enabled(this@NodeService)) put("LINE_MCP_MOCK", "1")
                     put("TMPDIR", cacheDir.absolutePath)

@@ -14,7 +14,7 @@
     "android:release": "npm run bundle:android:release && cd android && ./gradlew assembleRelease && for f in app/build/outputs/apk/release/*.apk; do bash ../scripts/purge-mock-check.sh $f; done",
     "mcp:interop": "node scripts/mcp-interop.mjs"
   },
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
     "@evex-dev/linejs": "^3.6.9",

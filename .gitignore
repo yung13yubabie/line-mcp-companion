@@ -8,3 +8,32 @@ node_modules/
 /android/local.properties
 android/app/src/main/assets/nodeapp/main.mjs
 android/app/src/main/jniLibs/**/*.so
+# build outputs / artifacts
+dist/
+build/
+out/
+coverage/
+*.apk
+*.aab
+*.apks
+*.idsig
+# secrets — never commit
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+keystore.pass
+keys/
+.env
+.env.*
+secrets/
+*.secret
+# local refs / SDK / native build trees (live outside the repo, ignore just in case)
+refs/
+android-sdk/
+android-sdk-setup/
+node-android-work/
+avd/
+apks/
+*.log
