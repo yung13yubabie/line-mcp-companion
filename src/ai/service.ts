@@ -11,7 +11,8 @@ import { type LinkReader, extractUrls } from "../links/reader.ts";
 import { Audit, redact, type Actor } from "./audit.ts";
 import { OpenAICompatProvider, FallbackChain, PRESETS, validateBaseUrl, type AiConfig, type AiProvider, type AiCapabilities, type ProviderKind, type FallbackModel } from "./provider.ts";
 import { deidentify, reidentify, isLocalUrl } from "./deidentify.ts";
-import { buildReplyPrompt, buildImagePrompt, detectInjection, sanitizeReply, historyHasUrl, extractSticker, type HistoryItem, type ChatMsg } from "./prompt.ts";
+import { contentFlags, scanContacts } from "./content-scan.ts";
+import { buildReplyPrompt, buildImagePrompt, detectInjection, sanitizeReply, trustedTexts, extractSticker, type HistoryItem, type ChatMsg } from "./prompt.ts";
 import { StickerCatalog, type StickerRef } from "./stickers.ts";
 import { lieflat } from "../style/lieflat/index.ts";
 import type { DigestStore, Digest } from "../storage/digests.ts";
@@ -266,14 +267,14 @@ export class AiService {
 		let flags: string[] = [];
 		let style: Suggestion["style"] = { method: "none", changed: false, before: 0, after: 0 };
 		if (body || !sticker) {
-			const out = sanitizeReply(body, { secrets, historyHasUrl: historyHasUrl(history) });
+			const out = sanitizeReply(body, { secrets, trustedTexts: trustedTexts(history) });
 			text = out.text;
 			flags = out.flags;
 			if (b.cfg.style_lieflat) {
 				const r = await lieflat.apply(text, { llm: (m) => this.provider().chat(m, { maxTokens: 400 }) });
 				// 改寫後再過一次輸出檢查；不通過就保留原句
 				try {
-					const re = sanitizeReply(r.text, { secrets, historyHasUrl: historyHasUrl(history) });
+					const re = sanitizeReply(r.text, { secrets, trustedTexts: trustedTexts(history) });
 					text = re.text;
 					flags = [...new Set([...flags, ...re.flags])];
 					style = { method: r.method, changed: r.changed, before: r.before.length, after: r.after.length };
@@ -304,7 +305,9 @@ export class AiService {
 		}
 		if (!prompt.trim()) throw new Error("prompt is required");
 		const p = buildImagePrompt(prompt);
-		const flags = detectInjection(prompt).suspected ? ["injection_suspected"] : [];
+		// M-2：說明文字走與 send_message 相同的旗標；提示詞含網址／聯絡方式（要在圖上畫網址）也強制確認
+		const flags = [...contentFlags(caption, detectInjection), ...(detectInjection(prompt).suspected ? ["injection_suspected"] : []), ...(scanContacts(prompt).kinds.length ? ["prompt_contact"] : [])];
+		if (origin === "mcp" && this.store.getSetting(`mcp_send_ok:${chatId}`) !== "on") flags.push("mcp_first_send");
 		const img = await this.provider().generateImage(p);
 		const dir = join(this.#opts.home, "ai-images");
 		mkdirSync(dir, { recursive: true, mode: 0o700 });

@@ -151,6 +151,8 @@ test("直接送（auto + 不需確認）：延遲、間隔、每小時 / 每日�
 	policy.setAiEnabled(true);
 	policy.set(A, { ai_allowed: true, mode: "auto", delay_sec: 10, min_interval_sec: 60, max_per_hour: 2, max_per_day: 3 });
 	policy.setTrust(A, "ai", "auto");
+	ctx.store.setSetting(`mcp_send_ok:${A}`, "on"); // 已核准過第一次 MCP 送出
+	ctx.store.setSetting(`mcp_send_ok:${G}`, "on");
 	const r = (await callTool(ctx, "send_message", { chat_id: A, text: "一" })) as { status: string };
 	assert.equal(r.status, "approved");
 	await outbox.processDue();
@@ -195,6 +197,7 @@ test("kill switch：擋新的、已排程退回 pending、核准也送不出", a
 	policy.setAiEnabled(true);
 	policy.set(A, { ai_allowed: true, mode: "auto", delay_sec: 5 });
 	policy.setTrust(A, "ai", "auto");
+	ctx.store.setSetting(`mcp_send_ok:${A}`, "on");
 	const r = (await callTool(ctx, "send_message", { chat_id: A, text: "一" })) as { id: number };
 	assert.equal(outbox.setKill(true), 1);
 	assert.equal(outbox.get(r.id)!.status, "pending");
@@ -372,6 +375,7 @@ test("信任狀態：預設 REVIEW；AI 與反詐分開；升級需條件；緊�
 	assert.throws(() => policy.setTrust(A, "ai", "auto"), /ai_not_allowed/, "不在代聊名單不能升級");
 	assert.throws(() => policy.setTrust(S, "scam", "auto"), /not allowed/i, "不在 MCP 白名單不能設定");
 	policy.set(A, { ai_allowed: true, mode: "auto", delay_sec: 0 });
+	store.setSetting(`mcp_send_ok:${A}`, "on");
 	// set() 不能偷改信任狀態
 	policy.set(A, { confirm_send: false } as never);
 	assert.equal(policy.trust(A, "ai"), "review");

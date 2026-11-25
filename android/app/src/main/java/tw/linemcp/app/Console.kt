@@ -218,7 +218,7 @@ fun QueueScreen(client: ControlClient, onBack: () -> Unit) {
 
 fun originLabel(o: String) = when (o) { "mcp" -> "外部 AI（MCP）"; "auto" -> "自動代聊"; "suggest" -> "AI 建議"; "ui" -> "你自己"; "scam_warn" -> "反詐提醒"; else -> o }
 fun flagText(f: String) = f.split(",").joinToString("、") { when (it) {
-    "injection_suspected" -> "對方訊息像在下指令給 AI"; "url_in_output" -> "回覆裡有連結"; "suspicious_output" -> "回覆內容怪怪的"; "unknown_sticker_dropped" -> "AI 想用你沒有的貼圖"
+    "injection_suspected" -> "對方訊息像在下指令給 AI"; "url_in_output" -> "回覆裡有連結"; "contact_in_output" -> "回覆裡有電話／LINE ID／Email"; "prompt_contact" -> "圖片提示詞裡有網址或聯絡方式"; "mcp_first_send" -> "外部 AI 第一次傳到這個聊天，請確認"; "suspicious_output" -> "回覆內容怪怪的"; "unknown_sticker_dropped" -> "AI 想用你沒有的貼圖"
     else -> if (it.startsWith("limited:")) "已到頻率上限" else it } }
 
 // ============================ AI 設定 ============================

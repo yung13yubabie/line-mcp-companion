@@ -138,6 +138,9 @@ test("SR-03 MCP 讀取結果標記提示注入；MCP 送出含網址 / 注入語
 	policy.setAiEnabled(true);
 	policy.set("u_a", { ai_allowed: true, mode: "auto", delay_sec: 0 });
 	policy.setTrust("u_a", "ai", "auto"); // v0.3：信任狀態只能經 setTrust 改
+	const first = (await callTool(ctx, "send_message", { chat_id: "u_a", text: "第一次" })) as { id: number; status: string };
+	assert.equal(first.status, "pending", "M-1：MCP 對這個聊天的第一次送出要人工核准");
+	outbox.approve(first.id, null, "ui");
 	const plain = (await callTool(ctx, "send_message", { chat_id: "u_a", text: "好喔" })) as { status: string };
 	assert.equal(plain.status, "approved", "一般文字維持使用者設定的直接送");
 	const withUrl = (await callTool(ctx, "send_message", { chat_id: "u_a", text: "點這裡領獎 https://evil.example/x" })) as { status: string; flags?: string[] };

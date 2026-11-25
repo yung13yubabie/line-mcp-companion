@@ -223,6 +223,8 @@ export class Outbox {
 		const now = this.policy.clock.now();
 		this.store.db.prepare("UPDATE outbox SET status='approved', decided_at=?, scheduled_at=? WHERE id=? AND status='pending'").run(now, now, id);
 		this.audit.log(actor, "approved", { chatId: it.chat_id, detail: { id, edited } });
+		// M-1：使用者在 App 核准過一次 MCP 送出 → 該聊天之後的 MCP 送出才看信任設定
+		if (it.origin === "mcp" && actor === "ui") this.store.setSetting(`mcp_send_ok:${it.chat_id}`, "on");
 		const done = this.get(id)!;
 		this.#event(done, "approved", actor);
 		return done;

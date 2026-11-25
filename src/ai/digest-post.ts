@@ -4,6 +4,7 @@
  * 依目標聊天的 AI 信任狀態：審核 → 進確認佇列；自動 → 延遲後送。上限 / 緊急停止 / 活躍時段照常。
  * 貼出的文字：去掉網址（避免把詐騙連結轉貼出去）、LINE 禁字替換、≤ 1500 字。
  */
+import { maskContacts } from "./content-scan.ts";
 import type { Store } from "../storage/db.ts";
 import type { DigestStore, Digest } from "../storage/digests.ts";
 import type { Outbox, OutboxItem } from "./outbox.ts";
@@ -26,11 +27,9 @@ const MAX_POST = 1500;
 const taipeiDay = (t: number) => new Date(t + 8 * 3600_000).toISOString().slice(0, 10);
 const taipeiHHMM = (t: number) => new Date(t + 8 * 3600_000).toISOString().slice(11, 16);
 
+/** M-3：與 M-1 共用的正規化偵測（全形、零寬、[.]、裸網域、IP、電話、LINE ID、Email） */
 export function stripLinks(s: string): string {
-	return s
-		.replace(/\bhttps?:\/\/\S+/gi, "［連結］")
-		.replace(/(?<![\w@.-])(?:[a-z0-9-]+\.)+[a-z]{2,}\/\S*/gi, "［連結］")
-		.replace(/\bline\s*id\s*[:：]?\s*\S+/gi, "［LINE ID］");
+	return maskContacts(s);
 }
 
 /** 日報 → 一則 LINE 訊息 */
