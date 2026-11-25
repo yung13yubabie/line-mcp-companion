@@ -116,6 +116,7 @@ fun SettingsScreen(client: ControlClient) {
         }
         ConnectorSection(client) { reason, f -> withAuth(reason, f) }
         Section("狀態") {
+            if (info?.optString("mcp_error") == "port_in_use") Text("⚠️ MCP 連接埠 47823 被其他 App 佔用：AI 用戶端可能連到冒牌服務，請先移除可疑 App 再重新啟動", color = Warn, fontSize = 13.sp)
             Text("已讀回條：${if (info?.optString("read_receipts") == "blocked") "封鎖中" else info?.optString("read_receipts") ?: "-"}")
             Text("資料加密：${when (info?.optString("data_key")) { "keystore" -> "Android Keystore"; "ephemeral" -> "Mock（臨時金鑰）"; null, "" -> "-"; else -> info?.optString("data_key") }}")
             Text("會話 / 開放 / 訊息：${info?.optJSONObject("counts")?.let { "${it.optInt("chats")} / ${it.optInt("allowed")} / ${it.optInt("messages")}" } ?: "-"}")

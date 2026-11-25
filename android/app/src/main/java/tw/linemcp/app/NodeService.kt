@@ -52,24 +52,30 @@ class NodeService : Service() {
                     put("LD_LIBRARY_PATH", applicationInfo.nativeLibraryDir)
                     put("LINE_MCP_HOME", filesDir.absolutePath)
                     put("LINE_MCP_PORT", "47823")
-                    put("LINE_MCP_TOKEN", Secrets.mcpToken(this@NodeService))
                     put("LINE_CONTROL_PORT", "47824")
-                    put("LINE_CONTROL_TOKEN", Secrets.controlToken(this@NodeService))
-                    // SQLite 靜態加密用的資料金鑰（Keystore 保護）；Node 讀到後立即從環境變數刪除
-                    put("LMA_DATA_KEY", Secrets.dataKeyB64(this@NodeService))
-                    Secrets.aiKey(this@NodeService)?.let { put("LMA_AI_KEY", it) }
+                    // secreview SR-07：秘密改經 stdin 傳入（環境變數即使在 Node 端 delete，仍留在 /proc/<pid>/environ）
+                    put("LMA_SECRETS_STDIN", "1")
+                    // H-1：控制 API 只接受 HMAC 簽章請求（UI 從不送 Bearer）
+                    put("LMA_CONTROL_HMAC_ONLY", "1")
                     put("HOME", filesDir.absolutePath)
                     if (MockMode.enabled(this@NodeService)) put("LINE_MCP_MOCK", "1")
                     put("TMPDIR", cacheDir.absolutePath)
                     // bionic 下 Node 讀不到系統時區（實測 Etc/Unknown），由 Java 傳入
                     put("TZ", java.util.TimeZone.getDefault().id)
                 }
+                val secrets = org.json.JSONObject()
+                    .put("mcp_token", Secrets.mcpToken(this@NodeService))
+                    .put("control_token", Secrets.controlToken(this@NodeService))
+                    .put("data_key", Secrets.dataKeyB64(this@NodeService))
+                    .apply { Secrets.aiKey(this@NodeService)?.let { put("ai_key", it) } }
                 val p = pb.start().also { proc = it }
+                p.outputStream.use { it.write((secrets.toString() + "\n").toByteArray(Charsets.UTF_8)) }
                 val logFile = File(filesDir, "node.log")
                 if (logFile.length() > 2_000_000) logFile.delete()
                 logFile.appendText("--- start ${System.currentTimeMillis()} ---\n")
                 p.inputStream.bufferedReader().forEachLine {
-                    Log.i("node", it)
+                    // secreview SR-08：release 版不把 Node 輸出寫進 logcat（只留 App 私有的 node.log）
+                    if (BuildConfig.DEBUG) Log.i("node", it)
                     logFile.appendText(it + "\n")
                 }
                 Log.w("node", "exited ${p.waitFor()}")
