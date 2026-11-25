@@ -75,12 +75,12 @@ test("未讀摘要（本機計算）、附件下載快取、同步狀態、trigg
 		u = (await callTool(ctx, "get_unread_summary")) as { chat_id: string; unread: number }[];
 		assert.equal(u.find((x) => x.chat_id === ALICE)!.unread, 2, "手機上讀到 1002 → 剩 1003、1004");
 
-		const a = (await callTool(ctx, "get_attachment", { chat_id: ALICE, message_id: "1003" })) as { has_media: boolean; cached_path: string | null };
+		const a = (await callTool(ctx, "get_attachment", { chat_id: ALICE, message_id: "1003" })) as { has_media: boolean; cached_file: string | null };
 		assert.equal(a.has_media, true);
-		assert.equal(a.cached_path, null);
-		const d1 = (await callTool(ctx, "download_media", { chat_id: ALICE, message_id: "1003", inline: true })) as { path: string; cached: boolean; base64: string };
+		assert.equal(a.cached_file, null);
+		const d1 = (await callTool(ctx, "download_media", { chat_id: ALICE, message_id: "1003", inline: true })) as { file: string; cached: boolean; base64: string };
 		assert.equal(d1.cached, false);
-		assert.ok(existsSync(d1.path));
+		assert.ok(existsSync(join(dir, d1.file))); // secreview SR-10：改回傳相對路徑
 		assert.equal(d1.base64, Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString("base64"));
 		const d2 = (await callTool(ctx, "download_media", { chat_id: ALICE, message_id: "1003" })) as { cached: boolean };
 		assert.equal(d2.cached, true);

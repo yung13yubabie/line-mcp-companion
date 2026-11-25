@@ -111,13 +111,14 @@ export class ScamDetector {
 	}
 
 	/** 單則判斷（不寫入） */
-	evaluate(text: string): { score: number; level: ScamLevel | null; rules: string[]; sample: ScamSample | null; similarity: number } {
+	evaluate(text: string, opts: { excludeSources?: ScamSample["source"][] } = {}): { score: number; level: ScamLevel | null; rules: string[]; sample: ScamSample | null; similarity: number } {
 		const r = scoreText(text);
 		let score = r.score;
 		let best: ScamSample | null = null;
 		let bestSim = 0;
 		let okSim = 0;
 		for (const s of this.samples()) {
+			if (opts.excludeSources?.includes(s.source)) continue;
 			const sim = similarity(text, s.text);
 			if (s.label === "SCAM" && sim > bestSim) {
 				bestSim = sim;

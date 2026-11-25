@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, relative, resolve, sep } from "node:path";
 import type { Store } from "../storage/db.ts";
 import type { LineSource } from "../sync/types.ts";
 
@@ -12,6 +12,11 @@ export class MediaCache {
 		this.#root = root;
 		this.#store = store;
 		this.#src = src;
+	}
+
+	/** 相對於資料目錄的路徑（給 MCP 回傳，不洩漏絕對路徑） */
+	relative(path: string): string {
+		return relative(this.#root, path);
 	}
 
 	cached(chatId: string, messageId: string) {
@@ -31,6 +36,9 @@ export class MediaCache {
 		const dir = join(this.#root, "media", safe(chatId));
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		const path = join(dir, `${safe(messageId)}-${safe(basename(dl.name || "file"))}`);
+		// 縱深防禦：最終路徑一定在 <root>/media/ 底下
+		const mediaRoot = resolve(this.#root, "media") + sep;
+		if (!resolve(dir).concat(sep).startsWith(mediaRoot) || !resolve(path).startsWith(mediaRoot)) throw new Error("unsafe media path");
 		writeFileSync(path, dl.bytes, { mode: 0o600 });
 		this.#store.putMedia(chatId, messageId, path, dl.mime, dl.bytes.byteLength);
 		return { path, mime: dl.mime, size: dl.bytes.byteLength, cached: false };
@@ -38,5 +46,7 @@ export class MediaCache {
 }
 
 function safe(s: string): string {
-	return s.replace(/[^\w.\-]/g, "_").slice(0, 120) || "_";
+	const t = s.replace(/[^\w.\-]/g, "_").slice(0, 120);
+	// 只由點組成（"."、".."）或空字串 → 不可當路徑段
+	return !t || /^\.+$/.test(t) ? "_" + t.replace(/\./g, "_") : t;
 }

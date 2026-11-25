@@ -184,10 +184,10 @@ export class OpenAICompatProvider implements AiProvider {
 		if (d?.url) {
 			const u = new URL(d.url);
 			if (u.protocol !== "https:") throw new AiError("bad_response", "圖片網址不是 https");
-			const r = await this.#fetch(u, { signal: AbortSignal.timeout(this.#timeoutMs), redirect: "follow" });
+			// 不跟隨轉址（避免被導向 http / 內網位址），串流讀取並在超過上限時立即中止
+			const r = await this.#fetch(u, { signal: AbortSignal.timeout(this.#timeoutMs), redirect: "error" });
 			if (!r.ok) throw new AiError("http_error", `下載圖片失敗 HTTP ${r.status}`);
-			const buf = new Uint8Array(await r.arrayBuffer());
-			if (buf.byteLength > 20 * 1024 * 1024) throw new AiError("too_large", "圖片太大");
+			const buf = await readLimitedBytes(r, 20 * 1024 * 1024);
 			return { bytes: buf, mime: sniffMime(buf) };
 		}
 		throw new AiError("bad_response", "沒有圖片資料");
@@ -246,6 +246,26 @@ export function capabilitiesFromModels(kind: ProviderKind, models: string[], cfg
 	const vision = kind === "anthropic" ? text : any(/gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision|grok-(2-vision|4|vision)|llava|claude|gemini|qwen.*vl/i);
 	const voice = any(/tts|whisper|transcribe|audio|realtime|voice/i);
 	return { text, vision, image_gen, voice };
+}
+
+async function readLimitedBytes(res: Response, max: number): Promise<Uint8Array> {
+	const len = Number(res.headers.get("content-length") ?? 0);
+	if (len > max) throw new AiError("too_large", "圖片太大");
+	if (!res.body) return new Uint8Array(0);
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > max) {
+			await reader.cancel();
+			throw new AiError("too_large", "圖片太大");
+		}
+		chunks.push(value);
+	}
+	return new Uint8Array(Buffer.concat(chunks));
 }
 
 async function readLimited(res: Response, max: number): Promise<string> {

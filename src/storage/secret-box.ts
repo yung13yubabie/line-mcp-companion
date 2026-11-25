@@ -31,7 +31,7 @@ export class SecretBox {
 	}
 	seal(plain: string, aad: string): string {
 		const iv = randomBytes(12);
-		const c = createCipheriv("aes-256-gcm", this.#key, iv);
+		const c = createCipheriv("aes-256-gcm", this.#key, iv, { authTagLength: 16 });
 		c.setAAD(Buffer.from(aad));
 		const ct = Buffer.concat([c.update(plain, "utf8"), c.final()]);
 		return ENC_PREFIX + Buffer.concat([iv, c.getAuthTag(), ct]).toString("base64");
@@ -39,7 +39,9 @@ export class SecretBox {
 	open(sealed: string, aad: string): string {
 		if (!sealed.startsWith(ENC_PREFIX)) throw new Error("not encrypted");
 		const b = Buffer.from(sealed.slice(ENC_PREFIX.length), "base64");
-		const d = createDecipheriv("aes-256-gcm", this.#key, b.subarray(0, 12));
+		// iv(12) + tag(16) 至少 28 bytes；明確要求 16-byte tag（避免接受被截短的 GCM tag，CWE-310 / semgrep gcm-no-tag-length）
+		if (b.byteLength < 28) throw new Error("invalid sealed value");
+		const d = createDecipheriv("aes-256-gcm", this.#key, b.subarray(0, 12), { authTagLength: 16 });
 		d.setAAD(Buffer.from(aad));
 		d.setAuthTag(b.subarray(12, 28));
 		return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString("utf8");

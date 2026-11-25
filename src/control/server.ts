@@ -10,7 +10,7 @@ import type { DigestPoster } from "../ai/digest-post.ts";
 import { type LinkReader, extractUrls } from "../links/reader.ts";
 import type { QuickTunnel } from "../mcp/tunnel.ts";
 import { connectorSettings, normalizePublicUrl } from "../mcp/gateway.ts";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHmac, createHash, createDecipheriv } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Store } from "../storage/db.ts";
 import type { Whitelist } from "../whitelist.ts";
@@ -74,7 +74,10 @@ class HttpError extends Error {
 	}
 }
 
-async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
+/** 已預先讀取（並視需要解密）的請求本體：HMAC 驗證要先看到本體 */
+const preread = new WeakMap<IncomingMessage, Buffer>();
+
+async function readRaw(req: IncomingMessage): Promise<Buffer> {
 	if (Number(req.headers["content-length"] ?? 0) > MAX_BODY) throw new HttpError(413, "payload too large");
 	const chunks: Buffer[] = [];
 	let n = 0;
@@ -83,13 +86,93 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 		if (n > MAX_BODY) throw new HttpError(413, "payload too large");
 		chunks.push(c as Buffer);
 	}
-	if (!chunks.length) return {};
+	return Buffer.concat(chunks);
+}
+
+async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
+	const buf = preread.get(req) ?? (await readRaw(req));
+	if (!buf.length) return {};
 	try {
-		const v = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+		const v = JSON.parse(buf.toString("utf8"));
 		if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error();
 		return v as Record<string, unknown>;
 	} catch {
 		throw new HttpError(400, "invalid JSON");
+	}
+}
+
+/** DNS rebinding 縱深防禦：Host 必須是 loopback（與 MCP 一致） */
+function hostOk(req: IncomingMessage): boolean {
+	const h = (req.headers.host ?? "").toLowerCase();
+	return /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(h);
+}
+
+/**
+ * 伺服器身分證明（防 loopback 埠被其他 App 搶佔）：UI 先用隨機 nonce 呼叫 GET /control/hello（不帶 token），
+ * 伺服器回 x-lma-proof = HMAC-SHA256(controlToken, "hello:"+nonce)。只有持有 token 的正牌 Node 算得出來；
+ * UI 驗證通過才送出帶 Bearer token 的請求。之後每個回應也帶 HMAC(token, "resp:"+nonce)，UI 可拒絕偽造的回應（例如假 QR）。
+ */
+const NONCE_RE = /^[0-9a-f]{32,128}$/;
+export function controlProof(token: string, msg: string): string {
+	return createHmac("sha256", token).update(msg).digest("hex");
+}
+
+/** listen 失敗（例如 EADDRINUSE：埠被其他程式佔用）時 reject，讓呼叫端能處理 / 告警，而不是 uncaught crash */
+export function listenLoopback(server: Server, port: number, host: string): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const onErr = (e: Error) => {
+			server.removeListener("listening", onOk);
+			reject(e);
+		};
+		const onOk = () => {
+			server.removeListener("error", onErr);
+			resolve();
+		};
+		server.once("error", onErr);
+		server.once("listening", onOk);
+		server.listen(port, host);
+	});
+}
+
+const sha256hex = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
+
+/**
+ * H-1 / N-05：Android UI 不再送出 Bearer token。每個請求帶
+ *   x-lma-nonce: <128-bit hex>
+ *   x-lma-auth:  v1 <unix-ms>.<HMAC(token, "req:"+nonce+":"+ts+":"+METHOD+":"+path?query+":"+sha256(rawBody))>
+ * 本體若含秘密（例如 AI 金鑰）以 AES-256-GCM 加密（x-lma-enc: 1；金鑰 = HMAC(token, "body:"+nonce)，AAD = METHOD:path）。
+ * 冒牌伺服器即使搶到埠，也只拿到一次性簽章與密文，拿不到 token 或金鑰。nonce 2 分鐘內不可重用，時間差 ±2 分鐘。
+ */
+const seenNonces = new Map<string, number>();
+const AUTH_SKEW = 120_000;
+function hmacAuthOk(req: IncomingMessage, token: string, raw: Buffer, nonce: string | null): boolean {
+	const h = req.headers["x-lma-auth"];
+	if (typeof h !== "string" || !nonce || !NONCE_RE.test(nonce)) return false;
+	const m = /^v1 (\d{10,16})\.([0-9a-f]{64})$/.exec(h.trim());
+	if (!m) return false;
+	const ts = Number(m[1]);
+	const now = Date.now();
+	if (Math.abs(now - ts) > AUTH_SKEW) return false;
+	const want = Buffer.from(controlProof(token, `req:${nonce}:${ts}:${req.method}:${req.url ?? ""}:${sha256hex(raw)}`));
+	const got = Buffer.from(m[2]!);
+	if (got.length !== want.length || !timingSafeEqual(got, want)) return false;
+	for (const [k, t] of seenNonces) if (t < now - AUTH_SKEW) seenNonces.delete(k);
+	if (seenNonces.has(nonce)) return false; // 重放
+	seenNonces.set(nonce, now);
+	return true;
+}
+
+export function decryptControlBody(token: string, nonce: string, method: string, path: string, raw: Buffer): Buffer {
+	const b = Buffer.from(raw.toString("utf8"), "base64");
+	if (b.length < 12 + 16) throw new HttpError(400, "bad encrypted body");
+	const key = createHmac("sha256", token).update(`body:${nonce}`).digest();
+	const d = createDecipheriv("aes-256-gcm", key, b.subarray(0, 12), { authTagLength: 16 });
+	d.setAAD(Buffer.from(`${method}:${path}`));
+	d.setAuthTag(b.subarray(b.length - 16));
+	try {
+		return Buffer.concat([d.update(b.subarray(12, b.length - 16)), d.final()]);
+	} catch {
+		throw new HttpError(400, "bad encrypted body");
 	}
 }
 
@@ -121,7 +204,7 @@ export function cancelWarnings(ai: AiService, chatId: string, messageId: string,
 	return rows.length;
 }
 
-export async function startControlHttp(deps: ControlDeps, opts: { port?: number; token: string }): Promise<{ server: Server; url: string }> {
+export async function startControlHttp(deps: ControlDeps, opts: { port?: number; token: string; /** Android：只接受 HMAC 簽章（UI 從不送 Bearer） */ hmacOnly?: boolean }): Promise<{ server: Server; url: string }> {
 	if (!opts.token || opts.token.length < 16) throw new Error("control token is required (>= 16 chars)");
 	const { store } = deps;
 	const startOfDay = () => {
@@ -639,12 +722,48 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 	};
 
 	const server = createServer(async (req, res) => {
+		let proofFor: ((code: number, json: string) => void) | null = null;
 		const send = (code: number, v: unknown) => {
-			if (!res.headersSent) res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(v ?? null));
+			if (res.headersSent) return;
+			const json = JSON.stringify(v ?? null);
+			proofFor?.(code, json);
+			res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(json);
 		};
-		if (req.headers.origin) return send(403, { error: "forbidden" });
-		if (!tokenOk(req, opts.token)) return send(401, { error: "unauthorized" });
+		if (req.headers.origin || !hostOk(req)) return send(403, { error: "forbidden" });
+		const nonce = typeof req.headers["x-lma-nonce"] === "string" ? req.headers["x-lma-nonce"].toLowerCase() : null;
+		if (req.method === "GET" && (req.url ?? "").split("?")[0] === "/control/hello") {
+			if (!nonce || !NONCE_RE.test(nonce)) return send(400, { error: "bad nonce" });
+			res.setHeader("x-lma-proof", controlProof(opts.token, `hello:${nonce}`));
+			return send(200, { ok: true });
+		}
+		let raw: Buffer;
 		try {
+			raw = await readRaw(req);
+		} catch (e) {
+			return send(e instanceof HttpError ? e.status : 400, { error: (e as Error).message });
+		}
+		const viaHmac = hmacAuthOk(req, opts.token, raw, nonce);
+		if (!viaHmac && (opts.hmacOnly || !tokenOk(req, opts.token))) return send(401, { error: "unauthorized" });
+		// 回應證明綁 nonce + method + path + status（+ JSON 本體雜湊）：UI 驗證後才採用回應（防假 QR / 假資料）
+		if (nonce && NONCE_RE.test(nonce)) {
+			const n = nonce;
+			const base = `resp:${n}:${req.method}:${req.url ?? ""}`;
+			const wh = res.writeHead.bind(res) as (...a: unknown[]) => ServerResponse;
+			(res as unknown as { writeHead: (...a: unknown[]) => ServerResponse }).writeHead = (code: unknown, ...rest: unknown[]) => {
+				if (!res.hasHeader("x-lma-proof")) res.setHeader("x-lma-proof", controlProof(opts.token, `${base}:${code}:-`));
+				return wh(code, ...rest);
+			};
+			proofFor = (code, json) => {
+				res.setHeader("x-lma-proof", controlProof(opts.token, `${base}:${code}:${sha256hex(json)}`));
+				res.setHeader("x-lma-proof-body", "1");
+			};
+		}
+		try {
+			if (req.headers["x-lma-enc"] === "1") {
+				if (!viaHmac || !nonce) throw new HttpError(400, "encrypted body needs HMAC auth");
+				raw = decryptControlBody(opts.token, nonce, req.method ?? "", (req.url ?? "").split("?")[0]!, raw);
+			}
+			preread.set(req, raw);
 			const url = new URL(req.url ?? "/", "http://x");
 			const h = routes[`${req.method} ${url.pathname}`];
 			if (!h) return send(404, { error: "not found" });
@@ -659,7 +778,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 	});
 	server.headersTimeout = 10_000;
 	server.requestTimeout = 120_000;
-	await new Promise<void>((r) => server.listen(opts.port ?? 47824, "127.0.0.1", r));
+	await listenLoopback(server, opts.port ?? 47824, "127.0.0.1");
 	const a = server.address();
 	return { server, url: `http://127.0.0.1:${typeof a === "object" && a ? a.port : opts.port}/control` };
 }

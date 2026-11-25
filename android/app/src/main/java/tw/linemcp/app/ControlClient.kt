@@ -9,24 +9,84 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 class ControlError(val status: Int, val code: String, message: String) : Exception(message)
 
 /** 呼叫 Node 端控制 API（src/control/server.ts）。全部在 Dispatchers.IO。 */
 class ControlClient(private val token: String, private val base: String = "http://127.0.0.1:47824/control") {
+    // secreview SR-01 / H-1：其他 App 可以搶先佔用 127.0.0.1:47824。先用 /hello 挑戰確認伺服器持有 token，
+    // 請求本身也不帶 token（見 raw()）。
+    private fun hmacHex(msg: String): String {
+        val m = Mac.getInstance("HmacSHA256")
+        m.init(SecretKeySpec(token.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        return m.doFinal(msg.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    }
+    private fun nonce(): String = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+    private fun same(a: String?, b: String): Boolean = a != null && MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
+
+    /** 不帶 token 的身分挑戰；失敗代表連到的不是我們的 Node 服務 */
+    private fun verifyServer() {
+        val n = nonce()
+        val c = URL("$base/hello").openConnection() as HttpURLConnection
+        c.connectTimeout = 3000; c.readTimeout = 3000
+        c.setRequestProperty("x-lma-nonce", n)
+        val ok = runCatching { c.responseCode == 200 && same(c.getHeaderField("x-lma-proof"), hmacHex("hello:$n")) }.getOrDefault(false)
+        runCatching { (if (c.responseCode < 400) c.inputStream else c.errorStream)?.close() }
+        c.disconnect()
+        if (!ok) throw ControlError(0, "server_untrusted", "本機服務身分驗證失敗：可能有其他 App 佔用了連接埠，已停止連線")
+    }
+
+    @Volatile private var verifiedAt = 0L
+    private fun hmacBytes(msg: String): ByteArray {
+        val m = Mac.getInstance("HmacSHA256")
+        m.init(SecretKeySpec(token.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        return m.doFinal(msg.toByteArray(Charsets.UTF_8))
+    }
+    private fun sha256Hex(b: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
+
+    /**
+     * H-1 / N-05：不送 Bearer token。每個請求用一次性 HMAC 簽章（綁 nonce、時間、method、path、本體雜湊），
+     * 本體用 AES-256-GCM 加密（金鑰由 token 與 nonce 推導）。冒牌伺服器拿不到 token、AI 金鑰或其他設定值。
+     * 回應必須帶綁 nonce / method / path / status / 本體的 proof，否則丟棄。
+     */
     private suspend fun raw(method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 5000): Pair<Int, ByteArray> = withContext(Dispatchers.IO) {
-        val c = URL(base + path).openConnection() as HttpURLConnection
+        if (System.currentTimeMillis() - verifiedAt > 60_000) { verifyServer(); verifiedAt = System.currentTimeMillis() }
+        val n = nonce()
+        val u = URL(base + path)
+        val fullPath = u.file // path + ?query，跟伺服器看到的 req.url 一樣
+        val pathOnly = u.path
+        val payload: ByteArray = if (body != null) {
+            val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
+            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, SecretKeySpec(hmacBytes("body:$n"), "AES"), javax.crypto.spec.GCMParameterSpec(128, iv))
+            cipher.updateAAD("$method:$pathOnly".toByteArray(Charsets.UTF_8))
+            val ct = cipher.doFinal(body.toString().toByteArray(Charsets.UTF_8))
+            android.util.Base64.encodeToString(iv + ct, android.util.Base64.NO_WRAP).toByteArray(Charsets.UTF_8)
+        } else ByteArray(0)
+        val ts = System.currentTimeMillis()
+        val sig = hmacHex("req:$n:$ts:$method:$fullPath:${sha256Hex(payload)}")
+        val c = u.openConnection() as HttpURLConnection
         c.requestMethod = method
-        c.setRequestProperty("authorization", "Bearer $token")
+        c.setRequestProperty("x-lma-nonce", n)
+        c.setRequestProperty("x-lma-auth", "v1 $ts.$sig")
         c.connectTimeout = 3000
         c.readTimeout = timeoutMs
         if (body != null) {
             c.doOutput = true
-            c.setRequestProperty("content-type", "application/json")
-            c.outputStream.use { it.write(body.toString().toByteArray()) }
+            c.setRequestProperty("content-type", "application/octet-stream")
+            c.setRequestProperty("x-lma-enc", "1")
+            c.outputStream.use { it.write(payload) }
         }
         val code = c.responseCode
         val bytes = (if (code < 400) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
+        val bodyPart = if (c.getHeaderField("x-lma-proof-body") == "1") sha256Hex(bytes) else "-"
+        val ok = same(c.getHeaderField("x-lma-proof"), hmacHex("resp:$n:$method:$fullPath:$code:$bodyPart"))
+        c.disconnect()
+        if (!ok) { verifiedAt = 0; throw ControlError(0, "server_untrusted", "本機服務回應未通過驗證，已丟棄（可能有其他 App 佔用連接埠）") }
         code to bytes
     }
 

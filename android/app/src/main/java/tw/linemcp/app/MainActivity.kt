@@ -47,6 +47,8 @@ data class Msg(val id: String, val sender: String?, val fromSelf: Boolean, val s
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // secreview SR-16：畫面含 MCP token、LINE 登入 QR 與聊天內容 → release 版禁止截圖 / 錄影 / 最近使用縮圖
+        if (!BuildConfig.DEBUG) window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE)
         if (BuildConfig.DEBUG) {
             // debug：主執行緒上的磁碟 / 網路存取都記到 logcat（tag StrictMode），用來稽核 ANR 風險
             android.os.StrictMode.setThreadPolicy(android.os.StrictMode.ThreadPolicy.Builder().detectAll().penaltyLog().build())
@@ -124,6 +126,7 @@ fun AppRoot(client: ControlClient) {
     var state by remember { mutableStateOf<JSONObject?>(null) }
     var chats by remember { mutableStateOf(listOf<ChatItem>()) }
     var stack by remember { mutableStateOf(listOf<Screen>(Screen.Chats)) }
+    var untrusted by remember { mutableStateOf(false) }
     val screen = stack.last()
     val scope = rememberCoroutineScope()
     fun go(s: Screen) { stack = stack + s }
@@ -132,7 +135,9 @@ fun AppRoot(client: ControlClient) {
 
     LaunchedEffect(Unit) {
         while (true) {
-            state = runCatching { client.state() }.getOrNull()
+            val r = runCatching { client.state() }
+            untrusted = (r.exceptionOrNull() as? ControlError)?.code == "server_untrusted"
+            state = r.getOrNull()
             if (state?.optString("phase") == "online") {
                 chats = runCatching {
                     val a = client.chats()
@@ -158,6 +163,15 @@ fun AppRoot(client: ControlClient) {
         }
     }) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
+            if (untrusted) {
+                // H-1：連到的不是我們的 Node 服務（埠被其他 App 佔用）→ 不顯示任何它回的內容、不送任何請求內容
+                Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("⚠️ 本機服務身分驗證失敗", color = Danger, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("連接埠 47824 上的服務不是這個 App 啟動的，可能有其他 App 正在冒充。已停止連線，你的 token、AI 金鑰和 LINE 登入都沒有送出。", fontSize = 14.sp)
+                    Text("請移除最近安裝的可疑 App，然後重新開機或在系統設定裡強制停止本 App 再開啟。", fontSize = 14.sp)
+                }
+                return@Box
+            }
             when (val s = screen) {
                 Screen.Chats -> if (online) ChatListScreen(state!!, chats,
                     onToggle = { c, v -> scope.launch { runCatching { client.setAllowed(c.id, v) } }; chats = chats.map { if (it.id == c.id) it.copy(allowed = v) else it } },

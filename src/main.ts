@@ -9,9 +9,11 @@
  *   LMA_DATA_KEY         Android：Keystore 解開的資料金鑰（base64 32 bytes），用來加密 SQLite 裡的 LINE token / E2EE 金鑰
  *   LMA_PASSPHRASE       桌面 / 開發：沒有 LMA_DATA_KEY 時必設（≥12 字），否則拒絕啟動（mock 模式除外）
  *   LMA_AI_KEY           （選用）AI API key；讀入記憶體後立即從環境變數移除。也可由 UI 經控制 API 設定。
+ *   LMA_SECRETS_STDIN=1  （建議，secreview SR-07）改從 stdin 第一行讀 JSON：{mcp_token, control_token, data_key, passphrase, ai_key}。
+ *                        環境變數即使 delete 也仍留在 /proc/<pid>/environ；stdin 不會。
  */
 import { join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { openDatabase } from "./storage/db.ts";
 import { resolveDataKey } from "./storage/data-key.ts";
@@ -42,6 +44,42 @@ import { LinkReader } from "./links/reader.ts";
 import { startGateway, normalizePublicUrl } from "./mcp/gateway.ts";
 import { QuickTunnel } from "./mcp/tunnel.ts";
 
+/** secreview SR-07：從 stdin 讀秘密（一行 JSON，上限 16KB，5 秒逾時） */
+async function readStdinSecrets(): Promise<Record<string, string>> {
+	return await new Promise((resolve, reject) => {
+		let buf = "";
+		const t = setTimeout(() => reject(new Error("timeout reading secrets from stdin")), 5000);
+		const finish = () => {
+			clearTimeout(t);
+			process.stdin.pause();
+			process.stdin.removeAllListeners("data");
+			try {
+				const v = JSON.parse(buf.split("\n")[0] || "{}") as Record<string, unknown>;
+				resolve(Object.fromEntries(Object.entries(v).filter(([, x]) => typeof x === "string")) as Record<string, string>);
+			} catch {
+				reject(new Error("invalid secrets JSON on stdin"));
+			}
+		};
+		process.stdin.setEncoding("utf8");
+		process.stdin.on("data", (d: string) => {
+			buf += d;
+			if (buf.length > 16 * 1024) return reject(new Error("secrets on stdin too large"));
+			if (buf.includes("\n")) finish();
+		});
+		process.stdin.on("end", finish);
+	});
+}
+let stdinSecrets: Record<string, string> = {};
+if (process.env.LMA_SECRETS_STDIN === "1") {
+	delete process.env.LMA_SECRETS_STDIN;
+	try {
+		stdinSecrets = await readStdinSecrets();
+	} catch (e) {
+		console.error((e as Error).message);
+		process.exit(78);
+	}
+}
+
 const rootHome = process.env.LINE_MCP_HOME ?? ".state";
 // Mock 模式：只在 debug 建置可用（release bundle 以 LMA_INCLUDE_MOCK="0" 建置，整段被移除），資料放在獨立的 mock/ 目錄
 const MOCK = process.env.LMA_INCLUDE_MOCK !== "0" && process.env.LINE_MCP_MOCK === "1";
@@ -50,7 +88,10 @@ const store = openDatabase(join(home, "line.db"));
 const whitelist = new Whitelist(store);
 let dataKey: ReturnType<typeof resolveDataKey>;
 try {
-	dataKey = resolveDataKey(store, process.env, { mock: MOCK });
+	const keyEnv: NodeJS.ProcessEnv = { LMA_DATA_KEY: stdinSecrets.data_key ?? process.env.LMA_DATA_KEY, LMA_PASSPHRASE: stdinSecrets.passphrase ?? process.env.LMA_PASSPHRASE };
+	delete process.env.LMA_DATA_KEY;
+	delete process.env.LMA_PASSPHRASE;
+	dataKey = resolveDataKey(store, keyEnv, { mock: MOCK });
 } catch (e) {
 	console.error((e as Error).message);
 	process.exit(78); // EX_CONFIG
@@ -60,16 +101,36 @@ const session = new Session(store, dataKey.box);
 let state: LoginState = { phase: "logged_out" };
 
 // ---- 秘密只放記憶體 ----
-let aiKey: string | undefined = process.env.LMA_AI_KEY || undefined;
+let aiKey: string | undefined = stdinSecrets.ai_key || process.env.LMA_AI_KEY || undefined;
 delete process.env.LMA_AI_KEY;
-// 沒設 token 就自動產生隨機 token 並只印一次（stderr）；絕不提供未驗證的服務
+// 沒設 token 就自動產生隨機 token；secreview SR-08：token 值不寫進 log（logcat / node.log / 終端紀錄），
+// 改寫到資料目錄下權限 0600 的 generated-tokens.json，log 只記檔名。絕不提供未驗證的服務。
 const genToken = () => randomBytes(24).toString("base64url");
-let mcpToken: string = process.env.LINE_MCP_TOKEN || "";
-const controlToken: string = process.env.LINE_CONTROL_TOKEN || genToken();
-if (!process.env.LINE_CONTROL_TOKEN) console.error(JSON.stringify({ event: "generated_token", which: "control", token: controlToken, note: "shown once" }));
+let mcpToken: string = stdinSecrets.mcp_token || process.env.LINE_MCP_TOKEN || "";
+const providedControl = stdinSecrets.control_token || process.env.LINE_CONTROL_TOKEN || "";
+const controlToken: string = providedControl || genToken();
+const generated: Record<string, string> = {};
+if (!providedControl) generated.control = controlToken;
 if (!mcpToken) {
 	mcpToken = genToken();
-	console.error(JSON.stringify({ event: "generated_token", which: "mcp", token: mcpToken, note: "shown once" }));
+	generated.mcp = mcpToken;
+}
+if (Object.keys(generated).length) {
+	mkdirSync(home, { recursive: true, mode: 0o700 });
+	const tokFile = join(home, "generated-tokens.json");
+	writeFileSync(tokFile, JSON.stringify(generated) + "\n", { mode: 0o600 });
+	chmodSync(tokFile, 0o600);
+	for (const which of Object.keys(generated)) console.error(JSON.stringify({ event: "generated_token", which, file: tokFile, note: "token value written to file (0600), not logged" }));
+}
+
+// secreview SR-08：所有 console 輸出（Android 上會進 logcat 與 node.log）遮蔽已知秘密
+const logSecrets = (): string[] => [mcpToken, controlToken, aiKey, (session as { base?: { authToken?: string } } | undefined)?.base?.authToken].filter((x): x is string => !!x && x.length >= 8);
+for (const k of ["log", "error", "warn", "info"] as const) {
+	const orig = console[k].bind(console);
+	console[k] = (...a: unknown[]) => {
+		const sec = logSecrets();
+		orig(...a.map((x) => (typeof x === "string" ? sec.reduce((t, v) => t.split(v).join("[redacted]"), x) : x)));
+	};
 }
 if (controlToken.length < 16 || mcpToken.length < 16) {
 	console.error("refusing to start: tokens must be at least 16 characters");
@@ -239,6 +300,7 @@ tunnel.onUrl = (u) => {
 	console.log(JSON.stringify({ event: "tunnel", url: u }));
 };
 let mcpStats: (() => import("./mcp/server.ts").McpStats) | null = null;
+let mcpError: string | null = null;
 const control = await startControlHttp(
 	{
 		store,
@@ -261,6 +323,7 @@ const control = await startControlHttp(
 		info: () => ({
 			mock: MOCK,
 			mcp_url: `http://127.0.0.1:${mcpPort}/mcp`,
+			mcp_error: mcpError,
 			mcp_auth: "bearer",
 			data_key: dataKey.source,
 			transport: "streamable-http",
@@ -268,17 +331,38 @@ const control = await startControlHttp(
 			counts: store.counts(),
 		}),
 	},
-	{ port: Number(process.env.LINE_CONTROL_PORT ?? 47824), token: controlToken },
-);
-const mcp = await startMcpHttp(ctx, { port: mcpPort, getToken: () => mcpToken, audit });
-mcpStats = mcp.stats;
+	{ port: Number(process.env.LINE_CONTROL_PORT ?? 47824), token: controlToken, hmacOnly: process.env.LMA_CONTROL_HMAC_ONLY === "1" },
+).catch((e: NodeJS.ErrnoException) => {
+	// secreview SR-01：控制埠被佔用 → 可能有其他 App 冒充本服務；不啟動，交給 UI 的身分驗證顯示警告
+	console.error(JSON.stringify({ event: "control_start_failed", reason: e.code === "EADDRINUSE" ? "port_in_use" : "start_failed" }));
+	process.exit(75);
+});
+// secreview SR-02：MCP 埠被其他程式佔用時不崩潰，記錄並讓 UI 顯示警告，之後每 30 秒重試
+let mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+async function startMcp(): Promise<boolean> {
+	try {
+		const mcp = await startMcpHttp(ctx, { port: mcpPort, getToken: () => mcpToken, audit });
+		mcpStats = mcp.stats;
+		mcpUrl = mcp.url;
+		mcpError = null;
+		return true;
+	} catch (e) {
+		mcpError = (e as NodeJS.ErrnoException).code === "EADDRINUSE" ? "port_in_use" : "start_failed";
+		audit.log("system", "mcp_start_failed", { ok: false, detail: { reason: mcpError } });
+		console.error(JSON.stringify({ event: "mcp_start_failed", reason: mcpError, port: mcpPort }));
+		return false;
+	}
+}
+if (!(await startMcp())) {
+	const retry = setInterval(() => void startMcp().then((ok) => ok && clearInterval(retry)), 30_000);
+}
 const gateway = await startGateway(ctx, { port: connectorPort, store, oauth, audit, getStaticToken: () => mcpToken });
 if (process.env.LMA_CONNECTOR === "1") {
 	// 桌面模式：配對碼印在 stderr（Android 上只在 App 畫面顯示）
 	console.error(JSON.stringify({ event: "connector", gateway: gateway.url, pairing_code: oauth.pairingCode().code, note: "pairing code valid 10 min; GET /control/connector for a new one" }));
 	if (process.env.LMA_TUNNEL === "cloudflare") void tunnel.start(connectorPort).then((st) => console.error(JSON.stringify({ event: "tunnel_status", ...st })));
 }
-console.log(JSON.stringify({ event: "ready", control: control.url, mcp: mcp.url, connector: gateway.url, mock: MOCK }));
+console.log(JSON.stringify({ event: "ready", control: control.url, mcp: mcpUrl, mcp_error: mcpError, connector: gateway.url, mock: MOCK }));
 
 // 排程送出 / 過期清理
 setInterval(() => {

@@ -222,6 +222,13 @@ export class ScamWarner {
 		if (c.min_level === "high" && a.level !== "high") return skip("below_min_level");
 		const m = this.#store.getMessage(a.chat_id, a.message_id);
 		if (!m || m.from_self === 1) return skip("no_message");
+		// 公開警告不經確認佇列：只依「內建規則 + 內建 / 使用者自己加的範例」判斷。
+		// MCP（外部 AI，可能被提示注入）加入的範例只能產生警示，不能單獨觸發公開警告。
+		if (m.text) {
+			const strict = this.#detector.evaluate(m.text, { excludeSources: ["mcp"] });
+			const need = c.min_level === "high" ? "high" : "suspicious";
+			if (!strict.level || (need === "high" && strict.level !== "high")) return skip("mcp_sample_requires_review");
+		}
 		const category = a.category ?? "可疑連結";
 		const sender = m.sender_mid ?? "?";
 		const detail = `${category}:${sender}`.slice(0, 60);

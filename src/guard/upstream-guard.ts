@@ -15,7 +15,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 export const READ_RECEIPT_METHODS = new Set(["sendChatChecked", "markAsRead", "markChatsAsRead", "markThreadsAsRead"]);
 /** 會從使用者帳號送出 / 修改訊息的 RPC：只能在 withSendPermit() 內呼叫（也就是只有 Outbox 的 sender 能送） */
-export const SEND_METHODS = new Set(["sendMessage", "sendMessageAwaitCommit", "unsendMessage", "sendPostback", "react", "sendChatRemoved"]);
+export const SEND_METHODS = new Set([
+	"sendMessage", "sendMessageAwaitCommit", "unsendMessage", "sendPostback", "react", "sendChatRemoved",
+	// secreview SR-12：LINEJS 3.6.9 裡實際存在、會以使用者身分對外產生可見動作或改動帳號 / 聊天室的 RPC（本 App 沒有任何正常路徑會呼叫）
+	"reactToMessage", "sendSquareThreadMessage", "createChat", "createRoomV2", "inviteIntoChat", "inviteIntoRoom",
+	"acceptChatInvitation", "acceptChatInvitationByTicket", "deleteSelfFromChat", "deleteOtherFromChat", "leaveRoom",
+	"updateChat", "blockContact", "updateProfileAttributes", "updateExtendedProfileAttribute", "updatePassword",
+	"inviteIntoSquareChat", "inviteToSquare", "leaveSquare", "leaveSquareChat", "deleteSquare", "deleteSquareChat",
+	"reportAbuseEx", "reportProfile", "reportSquare", "reportSquareChat", "reportSquareMember", "reportSquareMessage",
+]);
 const sendPermit = new AsyncLocalStorage<boolean>();
 /** 只有 LinejsSender 會用：在這個 callback 範圍內才允許 SEND_METHODS */
 export function withSendPermit<T>(fn: () => Promise<T>): Promise<T> {
