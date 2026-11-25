@@ -93,7 +93,7 @@ const TOOL_DEFS: Record<string, { description: string; schema: Record<string, z.
 };
 
 export function buildMcpServer(ctx: ToolContext, hooks: { client?: string; onCall?: (name: string, ok: boolean, ms: number, code?: string) => void } = {}): McpServer {
-	const server = new McpServer({ name: "line-mcp-app", version: "0.2.0" });
+	const server = new McpServer({ name: "line-mcp-app", version: "0.2.1" });
 	const names: string[] = [...BASIC_TOOLS, ...(ctx.ai ? SEND_TOOLS : []), ...(ctx.ai ? REVIEW_TOOLS : []), ...(ctx.scam ? SCAM_TOOLS : [])];
 	for (const name of names) {
 		const def = TOOL_DEFS[name]!;

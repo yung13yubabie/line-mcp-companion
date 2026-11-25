@@ -499,7 +499,7 @@ test("反詐信任成員 + 誤判；反詐紀錄 / AI 紀錄加密保存、可�
 });
 
 test("被隱藏 / 收回的訊息：不回覆、不當脈絡、取消待送、安靜略過不留紀錄；社群事件轉換", async () => {
-	const { ctx, store, policy, ai, outbox, provider, events, audit } = setup();
+	const { ctx, store, policy, ai, outbox, provider, events, audit, scam } = setup();
 	const { squareHidden } = await import("../src/sync/square-events.ts");
 	const { SyncEngine } = await import("../src/sync/engine.ts");
 	policy.setAiEnabled(true);
@@ -514,6 +514,14 @@ test("被隱藏 / 收回的訊息：不回覆、不當脈絡、取消待送、�
 	const logBefore = events.aiList({}).length;
 	assert.equal(await ai.autoReply(A, "4"), null, "被隱藏的觸發 → 略過");
 	ai.onNewMessages([{ chatId: A, id: "4", fromSelf: false }]);
+	// 反詐偵測也安靜略過被隱藏的訊息
+	const scamBefore = events.scamList({}).length;
+	store.insertMessage({ chatId: G, id: "4h", senderMid: "u_carol", fromSelf: false, sentAt: T0, contentType: "NONE", text: "此訊息已被隱藏。" });
+	scam.onNewMessages([{ chatId: G, id: "4h", fromSelf: false }]);
+	await new Promise((r) => setTimeout(r, 20));
+	assert.equal(events.aiList({}).length, logBefore, "被隱藏：不寫 AI 紀錄");
+	assert.equal(events.scamList({}).length, scamBefore, "被隱藏：不寫反詐紀錄");
+	assert.equal(audit.recent({ limit: 500 }).length, auditBefore, "被隱藏：不寫稽核");
 	// 待送的引用回覆，之後原訊息被收回 → 取消
 	const q = (await callTool(ctx, "send_message", { chat_id: A, text: "好啊", reply_to: "3" })) as { id: number };
 	const logMid = events.aiList({}).length;
@@ -534,7 +542,6 @@ test("被隱藏 / 收回的訊息：不回覆、不當脈絡、取消待送、�
 	assert.equal(events.aiList({}).length, logMid, "取消不寫 AI 紀錄");
 	assert.equal(audit.recent({ limit: 500 }).length, auditMid, "取消不寫稽核");
 	assert.equal(logMid - logBefore, 1, "只有正常的 send_message 有紀錄");
-	void auditBefore;
 	// 社群事件
 	assert.deepEqual(squareHidden({ type: "NOTIFIED_DESTROY_MESSAGE", payload: { notifiedDestroyMessage: { squareChatMid: "m1", messageId: "77" } } }), { chatId: "m1", messageId: "77", reason: "unsent" });
 	assert.equal(squareHidden({ type: "RECEIVE_MESSAGE", payload: { receiveMessage: { squareMessage: { state: 3, message: { id: "8", to: "m1", text: "x" } } } } })!.reason, "forbidden");

@@ -1,7 +1,7 @@
 # Security Review Brief — LINE MCP Companion
 
 Scope: Android app `tw.linemcp.app` (Kotlin/Compose UI + embedded Node 24 running LINEJS), the local
-MCP server, the local control API, AI features and the anti-scam module. Version 0.2.0.
+MCP server, the local control API, AI features and the anti-scam module. Version 0.2.1.
 All paths are relative to the repository root.
 
 ## 1. Architecture

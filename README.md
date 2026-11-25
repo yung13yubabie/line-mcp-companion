@@ -35,7 +35,7 @@
 2. 確認簽章（release 版）：
 
    ```
-   apksigner verify --print-certs line-mcp-app-0.2.0-arm64-v8a-release.apk
+   apksigner verify --print-certs line-mcp-app-0.2.1-arm64-v8a-release.apk
    ```
 
    憑證 SHA-256 必須是：

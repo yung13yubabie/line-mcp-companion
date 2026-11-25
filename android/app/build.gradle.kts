@@ -11,8 +11,8 @@ android {
         applicationId = "tw.linemcp.app"
         minSdk = 29          // Android 10+
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
     }
     // 正式簽章：keystore 放在 repo 外（預設 ../../../keys/release.jks，密碼在權限 0600 的檔案）。
     // 可用環境變數 LMA_KEYSTORE / LMA_KEYSTORE_PASS_FILE 覆寫。找不到就不簽（release 建置會失敗，不會退回 debug 金鑰）。
