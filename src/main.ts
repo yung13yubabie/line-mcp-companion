@@ -160,7 +160,9 @@ async function goMockOnline(): Promise<void> {
 		ai.setConfig({ provider: "mock" });
 		ai.setDriver("builtin");
 		policy.setAiEnabled(true);
-		for (const id of MOCK_AI_ALLOWED) policy.set(id, { ai_allowed: true, mode: id === "c_mock_work" ? "auto" : "suggest", confirm_send: true });
+		for (const id of MOCK_AI_ALLOWED) policy.set(id, { ai_allowed: true, mode: id === "c_mock_work" ? "auto" : "suggest" });
+		// 示範信任狀態：工作群 AI 回覆升到「自動」（其餘維持審核）
+		policy.setTrust("c_mock_work", "ai", "auto", "ui", "mock 示範");
 		policy.set("c_mock_family", { ai_allowed: false });
 		await ai.suggestToQueue("u_mock_mom", "auto", "suggest", null, "9004").catch((e) => console.error("mock seed:", (e as Error).message));
 		await ai.suggestToQueue("c_mock_work", "auto", "suggest", null, "9201").catch((e) => console.error("mock seed:", (e as Error).message));

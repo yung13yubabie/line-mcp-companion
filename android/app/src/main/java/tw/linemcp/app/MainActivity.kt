@@ -113,6 +113,7 @@ sealed interface Screen {
     data class ChatAi(val chatId: String, val name: String, val type: String) : Screen
     data object Scam : Screen
     data object Social : Screen
+    data object Logs : Screen
 }
 
 @Composable
@@ -167,6 +168,7 @@ fun AppRoot(client: ControlClient) {
                 is Screen.ChatAi -> ChatAiScreen(client, s.chatId, s.name, s.type, onBack = ::back)
                 Screen.Scam -> ScamScreen(client, onBack = ::back, onChat = { id, name -> go(Screen.ChatAi(id, name, "GROUP")) })
                 Screen.Social -> SocialScreen(client, chats.filter { it.allowed && it.aiAllowed }, onBack = ::back)
+                Screen.Logs -> LogsScreen(client, onBack = ::back)
             }
         }
     }

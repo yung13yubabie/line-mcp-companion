@@ -82,9 +82,10 @@ fun ToggleRow(label: String, checked: Boolean, sub: String? = null, enabled: Boo
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun <T> Chips(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         options.forEach { (v, label) ->
             FilterChip(selected = v == selected, onClick = { onSelect(v) }, label = { Text(label, fontSize = 13.sp) },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = LineGreen.copy(alpha = 0.18f)))

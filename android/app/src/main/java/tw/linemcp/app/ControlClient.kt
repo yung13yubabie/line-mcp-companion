@@ -42,6 +42,11 @@ class ControlClient(private val token: String, private val base: String = "http:
 
     suspend fun getObj(path: String) = JSONObject(call("GET", path))
     suspend fun getArr(path: String) = JSONArray(call("GET", path))
+    suspend fun getBytes(path: String, timeoutMs: Int = 20_000): ByteArray {
+        val (code, bytes) = raw("GET", path, null, timeoutMs)
+        if (code >= 400) throw ControlError(code, "error", "HTTP $code")
+        return bytes
+    }
     suspend fun post(path: String, body: JSONObject = JSONObject(), timeoutMs: Int = 5000): String = call("POST", path, body, timeoutMs)
     suspend fun postObj(path: String, body: JSONObject = JSONObject(), timeoutMs: Int = 5000) = JSONObject(post(path, body, timeoutMs))
 

@@ -94,12 +94,30 @@ fun ConsoleScreen(client: ControlClient, go: (Screen) -> Unit) {
                 Row(Modifier.fillMaxWidth().clickable { go(Screen.ChatAi(c.getString("chat_id"), c.optString("name"), "GROUP")) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(c.optString("name"), fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("今天 ${c.optInt("sent_today")} / ${c.optInt("max_per_day")} · ${if (c.optBoolean("confirm_send")) "送前確認" else "直接送"}", fontSize = 12.sp, color = Color.Gray)
+                        Text("今天 ${c.optInt("sent_today")} / ${c.optInt("max_per_day")}", fontSize = 12.sp, color = Color.Gray)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TrustPill("AI", c.optString("ai_trust"))
+                            if (c.optString("ai_trust") == "auto") TextButton(onClick = { post("/trust", JSONObject().put("chat_id", c.getString("chat_id")).put("feature", "ai").put("state", "review")) }, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("降回審核", fontSize = 12.sp) }
+                            if (c.optBoolean("warn_enabled")) {
+                                TrustPill("反詐", c.optString("scam_trust"))
+                                if (c.optString("scam_trust") == "auto") TextButton(onClick = { post("/trust", JSONObject().put("chat_id", c.getString("chat_id")).put("feature", "scam").put("state", "review")) }, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("降回審核", fontSize = 12.sp) }
+                            }
+                        }
                     }
-                    if (c.optBoolean("warn_enabled")) Pill("🛡 反詐", LineGreen)
-                    Spacer(Modifier.width(6.dp))
                     Pill(if (!c.optBoolean("ai_allowed")) "未加入代聊" else MODE_LABEL[c.optString("mode")] ?: "", if (c.optBoolean("ai_allowed") && c.optString("mode") != "off") LineGreen else Color.Gray)
                 }
+            }
+        }
+        // ---- 信任狀態 ----
+        Section("信任狀態", "審核＝每則先進確認佇列（預設）；自動＝直接送，上限 / 冷卻 / 緊急停止照樣有效。按緊急停止會全部降回審核") {
+            val anyAuto = dash.optJSONArray("chats")?.objs().orEmpty().any { it.optString("ai_trust") == "auto" || it.optString("scam_trust") == "auto" }
+            OutlinedButton(enabled = anyAuto, onClick = { post("/trust/demote_all", JSONObject()) }) { Text("全部降回審核") }
+            ToggleRow("允許 MCP 核准佇列", dash.optBoolean("mcp_allow_approve"), "預設關：外部 AI 只能擬稿 / 修改 / 退回，送出要你按") { post("/mcp/permissions", JSONObject().put("mcp_allow_approve", it)) }
+            ToggleRow("允許 MCP 升級到自動", dash.optBoolean("mcp_allow_promote"), "預設關；降回審核永遠可以") { post("/mcp/permissions", JSONObject().put("mcp_allow_promote", it)) }
+            val log = dash.optJSONArray("trust_log")?.objs().orEmpty()
+            if (log.isNotEmpty()) Text("最近變更", fontSize = 12.sp, color = Color.Gray)
+            log.take(6).forEach { l ->
+                Text("${fmtDateTime(l.optLong("ts"))} ${chatName(dash, l.optString("chat_id"))}｜${if (l.optString("feature") == "ai") "AI" else "反詐"} ${trustLabel(l.optString("from_state"))}→${trustLabel(l.optString("to_state"))}（${actorLabel(l.optString("actor"))}${l.optString("reason").takeIf { it.isNotEmpty() && it != "null" }?.let { "，$it" } ?: ""}）", fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
         // ---- 反詐 ----
@@ -112,7 +130,10 @@ fun ConsoleScreen(client: ControlClient, go: (Screen) -> Unit) {
                 }
                 val w = sc.optJSONArray("warnings")?.objs().orEmpty()
                 if (w.isNotEmpty()) Text("最近發出的提醒：${w.size} 則（最後 ${fmtDateTime(w.first().optLong("created_at"))}，${statusLabel(w.first().optString("status"))}）", fontSize = 12.sp, color = Color.Gray)
-                OutlinedButton(onClick = { go(Screen.Scam) }) { Text("看全部警示") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { go(Screen.Scam) }) { Text("看全部警示") }
+                    OutlinedButton(onClick = { go(Screen.Logs) }) { Text("紀錄") }
+                }
             }
         }
         // ---- MCP ----
@@ -138,6 +159,13 @@ fun ConsoleScreen(client: ControlClient, go: (Screen) -> Unit) {
         Spacer(Modifier.height(16.dp))
     }
 }
+
+fun trustLabel(s: String) = if (s == "auto") "自動" else "審核"
+fun actorLabel(s: String) = when (s) { "ui" -> "你"; "mcp" -> "MCP"; "system" -> "系統"; else -> s }
+fun chatName(dash: JSONObject, id: String) = dash.optJSONArray("chats")?.objs()?.firstOrNull { it.optString("chat_id") == id }?.optString("name") ?: id.take(8)
+
+@Composable
+fun TrustPill(label: String, state: String) = Pill("$label：${trustLabel(state)}", if (state == "auto") Warn else Color.Gray)
 
 fun statusLabel(s: String) = when (s) { "sent" -> "已送出"; "pending" -> "待確認"; "approved" -> "排程中"; "rejected" -> "已取消"; "failed" -> "失敗"; "expired" -> "過期"; else -> s }
 
@@ -173,11 +201,13 @@ fun QueueScreen(client: ControlClient, onBack: () -> Unit) {
                         "image" -> Text("🖼 生成的圖片${if (it.optBoolean("has_image")) "" else "（檔案不見了）"}", fontSize = 13.sp)
                     }
                     if (it.optString("kind") != "sticker" || text.isNotEmpty()) OutlinedTextField(text, { v -> text = v }, modifier = Modifier.fillMaxWidth())
+                    if (it.optString("origin") == "scam_warn") Text("可以自由改寫；不能有連結、LINE ID 或引用詐騙內容，禁字會自動替換", fontSize = 11.sp, color = Color.Gray)
                     val flags = it.optString("flags")
                     if (flags.isNotEmpty() && flags != "null") Text("⚠️ 幫你標出來：${flagText(flags)}", fontSize = 12.sp, color = Warn)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { scope.launch { runCatching { client.post("/queue/approve", JSONObject().put("id", it.getInt("id")).put("text", text)) }.onFailure { e -> err = friendly(e) }; tick++ } }) { Text("送出") }
                         OutlinedButton(onClick = { scope.launch { runCatching { client.post("/queue/reject", JSONObject().put("id", it.getInt("id"))) }; tick++ } }) { Text("不要") }
+                        if (text != it.optString("text")) TextButton(onClick = { scope.launch { runCatching { client.post("/queue/edit", JSONObject().put("id", it.getInt("id")).put("text", text)) }.onSuccess { err = null }.onFailure { e -> err = friendly(e) }; tick++ } }) { Text("先存") }
                     }
                 }
             }
@@ -208,6 +238,11 @@ fun AiSettingsScreen(client: ControlClient, onBack: () -> Unit) {
         var baseUrl by remember { mutableStateOf(conf.optString("base_url")) }
         var model by remember { mutableStateOf(conf.optString("model")) }
         var imageModel by remember { mutableStateOf(conf.optString("image_model")) }
+        var mtf by remember { mutableStateOf(conf.optString("max_tokens_field").takeIf { it != "null" } ?: "") }
+        var fallbacks by remember { mutableStateOf(conf.optJSONArray("fallback")?.objs().orEmpty()) }
+        var fbUrl by remember { mutableStateOf("http://127.0.0.1:8080/v1") }
+        var fbModel by remember { mutableStateOf("") }
+        var fbKey by remember { mutableStateOf(false) }
         var persona by remember { mutableStateOf(c.optString("persona")) }
         var cap by remember { mutableIntStateOf(c.optInt("daily_cap", 20)) }
         Text("只有選「App 內建 AI」才需要這裡。用外部連接器代聊的話可以略過 🙂", fontSize = 13.sp, color = Color.Gray)
@@ -221,10 +256,37 @@ fun AiSettingsScreen(client: ControlClient, onBack: () -> Unit) {
             OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("API 網址（必須 https）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(model, { model = it }, label = { Text("文字模型") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(imageModel, { imageModel = it }, label = { Text("圖片模型（選填）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Text("max tokens 欄位（遇到 HTTP 400 會自動換另一個重試）", fontSize = 12.sp, color = Color.Gray)
+            Chips(listOf("" to "自動", "max_completion_tokens" to "max_completion_tokens", "max_tokens" to "max_tokens"), mtf) { mtf = it }
             Button(onClick = { scope.launch {
-                runCatching { client.post("/ai", JSONObject().put("provider", provider).put("base_url", baseUrl).put("model", model).put("image_model", imageModel)) }
+                runCatching { client.post("/ai", JSONObject().put("provider", provider).put("base_url", baseUrl).put("model", model).put("image_model", imageModel).put("max_tokens_field", mtf.ifEmpty { JSONObject.NULL })) }
                     .onSuccess { msg = "存好了"; load() }.onFailure { msg = friendly(it) }
             } }) { Text("儲存") }
+        }
+        Section("備援模型", "主模型連不上、沒額度時依序改問；可以放本機 llama-server（http://127.0.0.1:8080/v1，免 key、免費）") {
+            fallbacks.forEachIndexed { i, f ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(f.optString("model"), fontWeight = FontWeight.Medium)
+                        Text("${f.optString("base_url")}${if (f.optBoolean("use_key")) " · 帶主 key" else ""}", fontSize = 11.sp, color = Color.Gray)
+                    }
+                    TextButton(onClick = { fallbacks = fallbacks.filterIndexed { j, _ -> j != i } }) { Text("移除") }
+                }
+            }
+            if (fallbacks.size < 3) {
+                OutlinedTextField(fbUrl, { fbUrl = it.trim() }, label = { Text("備援 API 網址") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(fbModel, { fbModel = it.trim() }, label = { Text("備援模型") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                ToggleRow("帶主 API key（同一家供應商）", fbKey) { fbKey = it }
+                TextButton(enabled = fbUrl.isNotEmpty() && fbModel.isNotEmpty(), onClick = { fallbacks = fallbacks + JSONObject().put("base_url", fbUrl).put("model", fbModel).put("use_key", fbKey); fbUrl = ""; fbModel = "" }) { Text("＋ 加入") }
+            }
+            Button(onClick = { scope.launch {
+                runCatching { client.post("/ai", JSONObject().put("fallback", JSONArray(fallbacks))) }.onSuccess { msg = "備援存好了"; load() }.onFailure { msg = friendly(it) }
+            } }) { Text("儲存備援") }
+        }
+        Section("隱私") {
+            ToggleRow("送到雲端模型前去識別化", conf.optBoolean("deidentify", true), "人名換成「成員A」，電話、網址、帳號、LINE ID、地址遮掉；回覆裡的代號會換回人名。本機模型不需要") {
+                scope.launch { runCatching { client.post("/ai", JSONObject().put("deidentify", it)) }.onSuccess { load() }.onFailure { e -> msg = friendly(e) } }
+            }
         }
         Section("API key", "用 Android Keystore 加密存在這支手機；只在記憶體交給本機服務，不會寫進資料庫") {
             Text(if (c.optBoolean("has_key")) "目前：${c.optString("key_hint").ifEmpty { "已設定" }}" else "目前：還沒設定", fontSize = 13.sp)
@@ -290,6 +352,9 @@ fun ChatAiScreen(client: ControlClient, chatId: String, name: String, type: Stri
     fun patch(p: JSONObject) = scope.launch {
         runCatching { client.postObj("/chat_ai", p.put("chat_id", chatId)) }.onSuccess { cfg = it; msg = null }.onFailure { msg = friendly(it) }
     }
+    fun setTrust(feature: String, state: String) = scope.launch {
+        runCatching { client.post("/trust", JSONObject().put("chat_id", chatId).put("feature", feature).put("state", state)) }.onSuccess { msg = null; load() }.onFailure { msg = friendly(it) }
+    }
     fun patchWarn(p: JSONObject) = scope.launch {
         runCatching { client.postObj("/scam/warn", p.put("chat_id", chatId)) }.onSuccess { warn = it; msg = null }.onFailure { msg = friendly(it) }
     }
@@ -300,7 +365,9 @@ fun ChatAiScreen(client: ControlClient, chatId: String, name: String, type: Stri
             ToggleRow("加入 AI 代聊名單", c.optBoolean("ai_allowed")) { patch(JSONObject().put("ai_allowed", it)) }
             Text("模式", fontSize = 13.sp)
             Chips(listOf("off" to "關閉", "suggest" to "僅建議回覆", "auto" to "AI 代聊"), c.optString("mode")) { patch(JSONObject().put("mode", it)) }
-            ToggleRow("發送前確認", c.optBoolean("confirm_send"), "建議保持開著；關掉後「代聊」模式會直接送") { patch(JSONObject().put("confirm_send", it)) }
+            Text("信任狀態", fontSize = 13.sp)
+            Chips(listOf("review" to "審核（每則先確認）", "auto" to "自動（直接送）"), c.optJSONObject("trust")?.optString("ai") ?: "review") { st -> setTrust("ai", st) }
+            Text("自動仍受間隔、上限、活躍時段和緊急停止限制；緊急停止會自動降回審核", fontSize = 11.sp, color = Color.Gray)
             ToggleRow("去 AI 味", c.optBoolean("style_lieflat"), "送出前把太像 AI 的句子修自然一點（Lieflat 規則）") { patch(JSONObject().put("style_lieflat", it)) }
             ToggleRow("允許生成圖片並發送", c.optBoolean("allow_image")) { patch(JSONObject().put("allow_image", it)) }
         }
@@ -326,7 +393,9 @@ fun ChatAiScreen(client: ControlClient, chatId: String, name: String, type: Stri
         if (type != "USER" && w != null) {
             val wc = w.getJSONObject("config")
             Section("反詐即時提醒", "偵測到詐騙 / 換群訊息時，馬上引用那則回一句提醒（不用 AI、不會引用詐騙內容）") {
-                ToggleRow("在這個群組開啟", wc.optBoolean("enabled"), "預設關閉；開啟後提醒會直接送，不經確認佇列") { patchWarn(JSONObject().put("enabled", it)) }
+                ToggleRow("在這個群組開啟", wc.optBoolean("enabled"), "預設關閉") { patchWarn(JSONObject().put("enabled", it)) }
+                Text("信任狀態", fontSize = 13.sp)
+                Chips(listOf("review" to "審核（先進確認佇列）", "auto" to "自動（直接送）"), c.optJSONObject("trust")?.optString("scam") ?: "review") { st -> setTrust("scam", st) }
                 Text("觸發門檻", fontSize = 13.sp)
                 Chips(listOf("high" to "只有高風險", "suspicious" to "可疑就提醒"), wc.optString("min_level")) { patchWarn(JSONObject().put("min_level", it)) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -372,12 +441,27 @@ fun ScamScreen(client: ControlClient, onBack: () -> Unit, onChat: (String, Strin
     var sample by remember { mutableStateOf("") }
     var tick by remember { mutableIntStateOf(0) }
     var msg by remember { mutableStateOf<String?>(null) }
+    var composeFor by remember { mutableStateOf<JSONObject?>(null) }
+    composeFor?.let { a ->
+        var t by remember(a) { mutableStateOf("") }
+        AlertDialog(onDismissRequest = { composeFor = null }, title = { Text("自訂提醒") },
+            text = { Column {
+                Text("會引用那則訊息送出；空白＝用群組範本。不能有連結、LINE ID 或引用詐騙內容。", fontSize = 12.sp, color = Color.Gray)
+                OutlinedTextField(t, { t = it.take(300) }, modifier = Modifier.fillMaxWidth(), minLines = 3, placeholder = { Text("例如：大家先別點連結，等管理員確認 🙏") })
+            } },
+            confirmButton = { TextButton(onClick = { scope.launch {
+                runCatching { client.postObj("/scam/compose", JSONObject().put("chat_id", a.getString("chat_id")).put("message_id", a.getString("message_id")).put("text", t.ifBlank { JSONObject.NULL })) }
+                    .onSuccess { r -> msg = if (r.optString("status") == "pending") "放進確認佇列了" else "排程送出了"; composeFor = null }.onFailure { e -> msg = friendly(e) }
+            } }) { Text("送出 / 排入") } },
+            dismissButton = { TextButton(onClick = { composeFor = null }) { Text("取消") } })
+    }
     LaunchedEffect(tick) {
         alerts = runCatching { client.getArr("/scam/alerts?limit=50").objs() }.getOrDefault(emptyList())
         if (tpl == null) tpl = runCatching { client.getObj("/scam/warn?chat_id=").optString("global_template") }.getOrNull() ?: ""
     }
     Page("反詐警示", onBack) {
         Text("只掃描你開放給 MCP 的群組。規則改作自 mars-tw/anti-scam-helper（Apache-2.0）。", fontSize = 12.sp, color = Color.Gray)
+        msg?.let { Text(it, color = LineGreen, fontSize = 13.sp) }
         val list = alerts ?: run { Loading(); return@Page }
         if (list.isEmpty()) Text("目前很平靜 🌿", modifier = Modifier.padding(vertical = 16.dp))
         list.forEach { a ->
@@ -387,7 +471,8 @@ fun ScamScreen(client: ControlClient, onBack: () -> Unit, onChat: (String, Strin
                 if (!a.isNull("ai_verdict")) Text("AI 判讀：${a.optString("ai_verdict")}｜${a.optString("ai_reason")}", fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { scope.launch { client.post("/scam/alert_status", JSONObject().put("id", a.getInt("id")).put("status", "seen")); tick++ } }) { Text("看過了") }
-                    TextButton(onClick = { scope.launch { client.post("/scam/alert_status", JSONObject().put("id", a.getInt("id")).put("status", "dismissed")); tick++ } }) { Text("誤判") }
+                    TextButton(onClick = { scope.launch { runCatching { client.postObj("/scam/false_positive", JSONObject().put("id", a.getInt("id")).put("trust_member", true)) }.onSuccess { msg = "已標成誤判，${a.optString("sender")} 加入信任成員" }.onFailure { msg = friendly(it) }; tick++ } }) { Text("誤判→信任此人") }
+                    TextButton(onClick = { composeFor = a }) { Text("寫提醒") }
                     TextButton(onClick = { onChat(a.getString("chat_id"), a.optString("chat_name")) }) { Text("群組設定") }
                 }
             }

@@ -59,6 +59,8 @@ export class MockSource implements LineSource {
 			m("9503", "c_mock_hood", "u_mock_n2", 74, "老師今天盤前精選一檔飆股，跟單學員已經翻倍，名額只剩 5 位，想跟的加我 LINE ID: mock_amy888"),
 			m("9504", "c_mock_hood", "u_mock_n4", 76, "上面那個是詐騙嗎？大家不要亂加喔"),
 			m("9505", "c_mock_hood", "u_mock_n2", 78, "您的包裹地址有誤，請於今日點擊 reurl.cc/mOcK1 完成實名驗證，逾期退回"),
+			// 管理員隱藏的訊息：不會被回覆、不當 AI 脈絡
+			m("9507", "c_mock_hood", "u_mock_n2", 79, "此訊息已被隱藏。"),
 		],
 	};
 
