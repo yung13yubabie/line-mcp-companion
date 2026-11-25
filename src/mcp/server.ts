@@ -85,8 +85,8 @@ const TOOL_DEFS: Record<string, { description: string; schema: Record<string, z.
 			"針對某則訊息寫一則反詐提醒（引用回覆）。text 可自由寫（可用 {category} {tip} {admins} {sender}），省略則用該群範本；不可含連結、LINE ID 或引用詐騙內容，LINE 禁字會自動替換。依該群反詐信任狀態進佇列或直接送。",
 		schema: { chat_id: z.string(), message_id: z.string().max(64), text: z.string().max(300).optional() },
 	},
-	mark_scam_false_positive: { description: "把一則反詐警示標成誤判，取消尚未送出的提醒；trust_member（預設 true）會把發送者加入這群的信任成員。", schema: { alert_id: z.number().int(), trust_member: z.boolean().optional() } },
-	trust_scam_member: { description: "把成員加入 / 移出這群的反詐信任名單（信任成員的訊息不會觸發提醒）。mention=true 代表提醒時 @ 他（管理員）。", schema: { chat_id: z.string(), member_id: z.string().max(64), mention: z.boolean().optional(), remove: z.boolean().optional() } },
+	mark_scam_false_positive: { description: "把一則反詐警示標成誤判，取消尚未送出的提醒；trust_member（預設 false）只會記成「建議信任」，要使用者在 App 確認；外部 AI 不能直接信任成員。", schema: { alert_id: z.number().int(), trust_member: z.boolean().optional() } },
+	trust_scam_member: { description: "把成員移出這群的反詐信任名單；新增信任成員要使用者在 App 裡做（除非使用者開啟 mcp_scam_trust）。mention=true 代表提醒時 @ 他（管理員）。", schema: { chat_id: z.string(), member_id: z.string().max(64), mention: z.boolean().optional(), remove: z.boolean().optional() } },
 	get_scam_log: {
 		description: "反詐紀錄：每次偵測的會話、發送者、時間、訊息、類型 / 規則、處理結果（queued / sent / suppressed_member / cooldown…）。",
 		schema: { chat_id: z.string().optional(), since: timeArg, until: timeArg, action: z.string().max(30).optional(), category: z.string().max(30).optional(), limit: z.number().int().min(1).max(500).optional() },
@@ -137,7 +137,7 @@ const TOOL_DEFS: Record<string, { description: string; schema: Record<string, z.
 };
 
 /** 會改變狀態但不送訊息的工具（不標 destructive） */
-const NON_DESTRUCTIVE_WRITE = new Set(["save_digest", "get_ai_suggestion", "edit_pending", "reject_pending", "mark_scam_false_positive", "trust_scam_member", "add_scam_sample"]);
+const NON_DESTRUCTIVE_WRITE = new Set(["save_digest", "get_ai_suggestion", "edit_pending", "reject_pending", "mark_scam_false_positive", "add_scam_sample"]);
 
 export interface BuildOptions {
 	client?: string;

@@ -222,6 +222,8 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 		trust: { ai: cfg.ai_trust, scam: deps.ai?.policy.trust(cfg.chat_id, "scam") ?? "review" },
 		trust_log: deps.ai?.policy.trustLog(10, cfg.chat_id) ?? [],
 		link_read: store.getSetting(`link_read:${cfg.chat_id}`) === "on",
+		digest_share: store.getSetting(`digest_share:${cfg.chat_id}`) === "on",
+		digest_target: store.getSetting(`digest_target:${cfg.chat_id}`) === "on",
 	});
 	const logFilter = (url: URL) => {
 		const q = url.searchParams;
@@ -568,6 +570,17 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			} catch (e) {
 				throw new HttpError(400, (e as Error).message);
 			}
+		},
+
+		// ---- M-3：日報跨聊天分享（來源允許分享 / 目標允許接收），預設都關 ----
+		"POST /control/digests/share": async (_u, req) => {
+			const b = await body(req);
+			const chatId = String(b.chat_id ?? "");
+			if (!store.getChat(chatId)) throw new HttpError(404, "chat not found");
+			if (b.share !== undefined) store.setSetting(`digest_share:${chatId}`, b.share ? "on" : "off");
+			if (b.target !== undefined) store.setSetting(`digest_target:${chatId}`, b.target ? "on" : "off");
+			deps.ai?.audit.log("ui", "digest_share_changed", { chatId, detail: { share: b.share, target: b.target } });
+			return { ok: true, share: store.getSetting(`digest_share:${chatId}`) === "on", target: store.getSetting(`digest_target:${chatId}`) === "on" };
 		},
 
 		// ---- 讀取連結 ----

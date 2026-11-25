@@ -14,6 +14,12 @@ import { AiService } from "../src/ai/service.ts";
 import { detectInjection, sanitizeReply } from "../src/ai/prompt.ts";
 import { stripLinks } from "../src/ai/digest-post.ts";
 import { scanContacts } from "../src/ai/content-scan.ts";
+import { randomBytes } from "node:crypto";
+import { DigestStore } from "../src/storage/digests.ts";
+import { SecretBox } from "../src/storage/secret-box.ts";
+import { DigestPoster } from "../src/ai/digest-post.ts";
+import { ScamDetector } from "../src/scam/detector.ts";
+import { READ_ONLY_TOOLS } from "../src/mcp/tools.ts";
 import type { MessageSender } from "../src/ai/sender.ts";
 import type { AiProvider } from "../src/ai/provider.ts";
 
@@ -142,4 +148,71 @@ test("M-3 日報連結過濾：裸網域、全形、[.]、零寬、LINE ID、IP�
 		assert.equal(scanContacts(out).kinds.length, 0, `${JSON.stringify(i)} → ${out}`);
 	}
 	assert.equal(stripLinks("晚餐七點，記得帶傘！"), "晚餐七點，記得帶傘！", "沒有聯絡方式時不改動全形標點");
+});
+
+test("M-3 日報貼文：只能貼回來源或雙方明確允許；外部 AI 寫的日報一律確認；排程沒指定來源只用目標聊天；沒有來源的日報不能貼", async () => {
+	const { ctx, store, wl, outbox } = v3Setup();
+	store.insertMessage({ chatId: "u_a", id: "m1", senderMid: "u_a", fromSelf: false, sentAt: Date.now() - 5000, contentType: "NONE", text: "我下週回診，醫生說要開刀" });
+	store.insertMessage({ chatId: "c_g", id: "g1", senderMid: "u_x", fromSelf: false, sentAt: Date.now() - 5000, contentType: "NONE", text: "週六掃街" });
+	const digests = new DigestStore(store, new SecretBox(randomBytes(32)), wl);
+	const poster = new DigestPoster(store, digests, outbox, ctx.ai);
+	const now = Date.now();
+	const priv = digests.save({ chat_id: "u_a", period_start: now - 3600_000, period_end: now, title: "私訊", items: [{ headline: "回診", body: "要開刀", source_message_ids: ["m1"] }], source: "builtin" }, "system");
+	assert.throws(() => poster.post([priv.id], "c_g", "ui"), /digest_target_not_allowed/, "私訊內容預設不能貼到群組");
+	store.setSetting("digest_target:c_g", "on");
+	assert.throws(() => poster.post([priv.id], "c_g", "ui"), /digest_source_not_shareable/);
+	// 貼回來源聊天 OK（不需要分享設定）
+	ctx.store.setSetting("mcp_send_ok:u_a", "on");
+	assert.equal(poster.post([priv.id], "u_a", "ui").route, "scheduled");
+	// MCP 寫的日報：即使目標 AUTO 也一律確認
+	const mcpD = (await callTool({ ...ctx, digests }, "save_digest", { chat_id: "c_g", period_start: new Date(now - 3600_000).toISOString(), period_end: new Date(now).toISOString(), title: "外部 AI 日報", items: [{ headline: "週六掃街", source_message_ids: ["g1"] }] })) as { id: number };
+	const r = poster.post([mcpD.id], "c_g", "mcp");
+	assert.equal(r.route, "pending");
+	assert.ok(outbox.get(r.item.id)!.flags!.includes("mcp_written_digest"));
+	// 沒有來源訊息的跨聊天日報不能貼
+	const empty = digests.save({ chat_id: null, period_start: now - 3600_000, period_end: now, title: "空", items: [{ headline: "憑空捏造" }], source: "mcp:x" }, "mcp");
+	assert.throws(() => poster.post([empty.id], "c_g", "ui"), /digest_no_sources/);
+	// 排程沒有 source_chats → 只用目標聊天自己的日報（私訊日報不會被帶進來）
+	outbox.supersede("c_g", ["digest"]);
+	store.setSetting("digest_share:u_a", "");
+	const sch = poster.saveSchedule({ target_chat: "c_g", time_hhmm: "00:00" }, "ui");
+	await poster.tick();
+	const posted = store.db.prepare("SELECT text FROM outbox WHERE chat_id='c_g' AND origin='digest' ORDER BY id DESC LIMIT 1").get() as { text: string } | undefined;
+	assert.ok(!posted || !posted.text.includes("開刀"), "排程不會把私訊日報貼到群組");
+	poster.deleteSchedule(sch.id, "ui");
+});
+
+test("M-4 外部 AI 不能把成員加入反詐信任名單（預設只記建議）", async () => {
+	const { ctx, store } = v3Setup();
+	const scam = new ScamDetector(store);
+	scam.seedBuiltin();
+	const c = { ...ctx, scam };
+	await assert.rejects(callTool(c, "trust_scam_member", { chat_id: "c_g", member_id: "u_scammer" }), /trust_requires_user/);
+	assert.equal(scam.admins("c_g").length, 0);
+	// 移除信任（更嚴格）可以
+	scam.setAdmin("c_g", "u_old", {});
+	await callTool(c, "trust_scam_member", { chat_id: "c_g", member_id: "u_old", remove: true });
+	assert.equal(scam.admins("c_g").length, 0);
+	store.insertMessage({ chatId: "c_g", id: "s1", senderMid: "u_scammer", fromSelf: false, sentAt: Date.now(), contentType: "NONE", text: "恭喜中獎！請加賴 abc123 領取獎金，點 https://tw-ezpost.com/pay 輸入信用卡" });
+	const alerts = scam.onNewMessages([{ chatId: "c_g", id: "s1", fromSelf: false }]);
+	assert.ok(alerts.length > 0);
+	const fp = (await callTool(c, "mark_scam_false_positive", { alert_id: alerts[0], trust_member: true })) as { trusted: boolean; trust_member?: string };
+	assert.equal(fp.trusted, false);
+	assert.equal(fp.trust_member, "suggested");
+	assert.equal(scam.admins("c_g").length, 0);
+});
+
+test("M-6 trigger_sync 不在 read scope；節流跨 MCP session 共用", async () => {
+	assert.ok(!READ_ONLY_TOOLS.has("trigger_sync"));
+	let full = 0;
+	let poll = 0;
+	const sync = { fullSync: async () => void full++, pollOnce: async () => (poll++, 0), status: () => ({}) };
+	const { store, wl } = v3Setup();
+	const mk = () => ({ store, whitelist: wl, sync: sync as never, media: null });
+	await callTool(mk(), "trigger_sync", { full: true });
+	await assert.rejects(callTool(mk(), "trigger_sync", { full: true }), /rate limited/, "換一個 session（新 ctx）也不能繞過");
+	assert.equal(full, 1);
+	const r = (await callTool(mk(), "trigger_sync", {})) as { throttled?: boolean };
+	assert.equal(r.throttled, true);
+	assert.equal(poll, 1);
 });
