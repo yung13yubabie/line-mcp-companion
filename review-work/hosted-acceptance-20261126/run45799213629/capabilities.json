@@ -1,0 +1,36 @@
+{
+  "runner": "Linux",
+  "architecture": "X64",
+  "kvm": {
+    "exists": true,
+    "readable": false,
+    "writable": false
+  },
+  "disk_free_bytes": 91436396544,
+  "minimum_free_bytes": 8589934592,
+  "emulator_version": {
+    "command": [
+      "/usr/local/lib/android/sdk/emulator/emulator",
+      "-version"
+    ],
+    "exit": 127,
+    "output": "tool_missing"
+  },
+  "adb_version": {
+    "command": [
+      "/usr/local/lib/android/sdk/platform-tools/adb",
+      "version"
+    ],
+    "exit": 0,
+    "output": "Android Debug Bridge version 1.0.41\nVersion 37.0.1-15733141\nInstalled as /usr/local/lib/android/sdk/platform-tools/adb\nRunning on Linux 7.0.0-1017-azure (x86_64)\n"
+  },
+  "accelerator": {
+    "command": [
+      "/usr/local/lib/android/sdk/emulator/emulator",
+      "-accel-check"
+    ],
+    "exit": 127,
+    "output": "tool_missing"
+  },
+  "installed_images": []
+}

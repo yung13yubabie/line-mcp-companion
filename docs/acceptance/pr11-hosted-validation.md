@@ -18,3 +18,14 @@ The dedicated draft is excluded from the existing Android-review build job only 
 `acceptance-results/status.json` distinguishes the harness's actual run/head/merge SHA from the fixed APK's producer head/source. It initializes all Android stages as `not_attempted`. `capabilities.json` preserves the actual commands and exits. Read-denial HTTP status and fixed API error text are retained without tokens, Authorization headers, or signed download URLs. Redacted receipts are retained as ordinary workflow artifacts, with no Release publication.
 
 Phase 1 does not start an AVD or claim installation, cold start, foreground/background, restart, or Android MCP results. If capability/input gates pass, a subsequent scoped validation update can execute those stages using official SDK images and synthetic data. Product and real-device gates remain open until their separate evidence exists. Any emulator result is not a physical-device result. No user phone/App, other app data or real LINE account/chat is used.
+
+## Preserved first hosted observation
+
+Run45799213629 genuinely ran on the standard hosted runner. Receipt artifact15106087773 has ZIP SHA256 `3f2bed311fe3822770e975d274d9052cde4fb7e7bf7242c500fbdac203f3bd00`.
+
+- Disk free91,436,396,544 bytes; adb37.0.1 version command exit0.
+- `/dev/kvm` exists, but runner read/write access is false.
+- Preinstalled emulator was absent, so version and accelerator probes were exit127 `tool_missing`.
+- Fixed artifact API was not called; there was no observed artifact403. No AVD/install/launch/MCP/restart happened.
+
+The next probe installs only the missing official stable emulator37.3.10 into RUNNER_TEMP, verifies its exact archive size/SHA256 against previously independently checked Google metadata, then repeats the actual accelerator check. It does not change device permissions, group membership or udev. This resolves the reversible missing-tool issue without pretending the KVM access issue has been resolved.

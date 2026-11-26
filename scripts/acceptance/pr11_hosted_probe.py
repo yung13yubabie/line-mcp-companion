@@ -161,6 +161,60 @@ def download_fixed():
         return False
 
 
+def official_emulator(sdk):
+    existing = sdk / "emulator/emulator"
+    if existing.is_file():
+        state["official_emulator_setup"] = "preinstalled"
+        return existing
+    state["official_emulator_setup"] = "attempted"
+    save()
+    url = "https://dl.google.com/android/repository/emulator-linux_x64-16970787.zip"
+    expected_size = 350068887
+    expected_sha = "a4405349d8a9c52136ab7861e5331dc40e85574bd91cb8889a298a2ff4c52e26"
+    root = Path(os.environ["RUNNER_TEMP"]) / "pr11-official-sdk"
+    root.mkdir(exist_ok=True)
+    archive_path = root / "emulator.zip"
+    h = hashlib.sha256()
+    total = 0
+    try:
+        # Official SDK archive only; no GitHub Authorization on this request.
+        with urllib.request.urlopen(url, timeout=45) as response, archive_path.open("wb") as output:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > expected_size:
+                    raise ValueError("tool_size_cap")
+                h.update(chunk)
+                output.write(chunk)
+        if total != expected_size or h.hexdigest() != expected_sha:
+            raise ValueError("tool_identity")
+        with zipfile.ZipFile(archive_path) as archive:
+            if sum(item.file_size for item in archive.infolist()) > 1100000000:
+                raise ValueError("tool_expansion_cap")
+            for item in archive.infolist():
+                path = Path(item.filename)
+                if path.is_absolute() or ".." in path.parts:
+                    raise ValueError("unsafe_tool_path")
+                archive.extract(item, root)
+                mode = item.external_attr >> 16
+                if mode:
+                    (root / path).chmod(mode & 0o777)
+        state["official_emulator_setup"] = "verified_official_archive"
+        (OUT / "emulator-setup.json").write_text(json.dumps({
+            "url": url, "revision": "37.3.10", "archive_bytes": total,
+            "sha256": h.hexdigest(), "private_keys_or_device_permissions_changed": False,
+        }, indent=2) + "\n")
+        save()
+        return root / "emulator/emulator"
+    except Exception:
+        state["official_emulator_setup"] = "failed_official_tool_setup"
+        state["capability"] = "blocked_tool_setup"
+        save()
+        return existing
+
+
 def main():
     save()
     if os.environ.get("GITHUB_REPOSITORY") != REPO or os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
@@ -177,7 +231,7 @@ def main():
         save()
         return 2
     sdk = Path(os.environ.get("ANDROID_HOME", "/nonexistent"))
-    emulator = sdk / "emulator/emulator"
+    emulator = official_emulator(sdk)
     adb = sdk / "platform-tools/adb"
     kvm = {"exists": Path("/dev/kvm").exists(),
            "readable": os.access("/dev/kvm", os.R_OK),
