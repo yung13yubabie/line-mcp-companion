@@ -3,9 +3,9 @@
  * 環境變數：
  *   LINE_MCP_HOME        資料目錄（Android：context.filesDir），內含 line.db 與 media/
  *   LINE_MCP_PORT        MCP 埠（預設 47823）
- *   LINE_MCP_TOKEN       MCP Bearer token（沒設 → 自動產生並只印一次；執行中可由 UI 輪換）
+ *   LINE_MCP_TOKEN       MCP Bearer token（沒設 → 自動產生並寫入 0600 檔案；執行中可由 UI 輪換）
  *   LINE_CONTROL_PORT    控制 API 埠（預設 47824）
- *   LINE_CONTROL_TOKEN   控制 API token（沒設 → 自動產生並只印一次）
+ *   LINE_CONTROL_TOKEN   控制 API token（沒設 → 自動產生並寫入 0600 檔案）
  *   LMA_DATA_KEY         Android：Keystore 解開的資料金鑰（base64 32 bytes），用來加密 SQLite 裡的 LINE token / E2EE 金鑰
  *   LMA_PASSPHRASE       桌面 / 開發：沒有 LMA_DATA_KEY 時必設（≥12 字），否則拒絕啟動（mock 模式除外）
  *   LMA_AI_KEY           （選用）AI API key；讀入記憶體後立即從環境變數移除。也可由 UI 經控制 API 設定。
@@ -13,6 +13,7 @@
  *                        環境變數即使 delete 也仍留在 /proc/<pid>/environ；stdin 不會。
  */
 import { join } from "node:path";
+import { installSafeConsole } from "./control/safe-console.ts";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { openDatabase } from "./storage/db.ts";
@@ -126,13 +127,9 @@ if (Object.keys(generated).length) {
 
 // secreview SR-08：所有 console 輸出（Android 上會進 logcat 與 node.log）遮蔽已知秘密
 const logSecrets = (): string[] => [mcpToken, controlToken, aiKey, (session as { base?: { authToken?: string } } | undefined)?.base?.authToken].filter((x): x is string => !!x && x.length >= 8);
-for (const k of ["log", "error", "warn", "info"] as const) {
-	const orig = console[k].bind(console);
-	console[k] = (...a: unknown[]) => {
-		const sec = logSecrets();
-		orig(...a.map((x) => (typeof x === "string" ? sec.reduce((t, v) => t.split(v).join("[redacted]"), x) : x)));
-	};
-}
+installSafeConsole(console, logSecrets);
+// The startup envelope is no longer needed after the consumers copied its values.
+stdinSecrets = {};
 if (controlToken.length < 16 || mcpToken.length < 16) {
 	console.error("refusing to start: tokens must be at least 16 characters");
 	process.exit(78);
@@ -155,7 +152,7 @@ const ai = new AiService(store, policy, outbox, audit, {
 const scam = new ScamDetector(store);
 scam.seedBuiltin();
 // AI 判讀（選用）：只有使用者開啟 scam_ai 且 App 內有 key 時
-scam.judge = (msgs) => ai.provider().chat(ai.deidMessages(msgs), { maxTokens: 120 });
+scam.judge = (msgs, options) => ai.provider().chat(ai.deidMessages(msgs), { maxTokens: 120, assertAuthorized: options?.assertAuthorized });
 const warner = new ScamWarner(store, outbox, audit, scam);
 // 反詐紀錄 / AI 代聊紀錄（人名與內容用資料金鑰加密）
 const events = new EventLog(store, dataKey.box);
@@ -361,7 +358,7 @@ if (!(await startMcp())) {
 const gateway = await startGateway(ctx, { port: connectorPort, store, oauth, audit, gatewayToken });
 if (process.env.LMA_CONNECTOR === "1") {
 	// 桌面模式：配對碼印在 stderr（Android 上只在 App 畫面顯示）
-	console.error(JSON.stringify({ event: "connector", gateway: gateway.url, pairing_code: oauth.pairingCode().code, note: "pairing code valid 10 min; GET /control/connector for a new one" }));
+	console.error(JSON.stringify({ event: "connector", gateway: gateway.url, note: "retrieve pairing code through authenticated /control/connector" }));
 	if (process.env.LMA_TUNNEL === "cloudflare") void tunnel.start(connectorPort).then((st) => console.error(JSON.stringify({ event: "tunnel_status", ...st })));
 }
 console.log(JSON.stringify({ event: "ready", control: control.url, mcp: mcpUrl, mcp_error: mcpError, connector: gateway.url, mock: MOCK }));

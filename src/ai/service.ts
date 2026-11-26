@@ -169,17 +169,17 @@ export class AiService {
 		return this.#provider;
 	}
 
-	/** 要不要去識別化：設定開（預設）且主模型不是本機 */
+	/** 任一可能接收資料的模型在雲端時，整條備援鏈都使用去識別資料。 */
 	shouldDeidentify(): boolean {
 		const c = this.config();
-		return c.deidentify !== false && !isLocalUrl(c.base_url);
+		return c.deidentify !== false && [c.base_url, ...(c.fallback ?? []).map((f) => f.base_url)].some((u) => !isLocalUrl(u));
 	}
 
-	/** 反詐 AI 判讀等單次呼叫用：把 user 訊息去識別化 */
+	/** 反詐與草稿等呼叫用；語氣卡等使用者內容也可能出現在 system role。 */
 	deidMessages(msgs: ChatMsg[], names: string[] = []): ChatMsg[] {
 		if (!this.shouldDeidentify()) return msgs;
 		const map = { names: new Map<string, string>() };
-		return msgs.map((m) => (m.role === "user" ? { ...m, content: deidentify(m.content, names, map).text } : m));
+		return msgs.map((m) => ({ ...m, content: deidentify(m.content, names, map).text }));
 	}
 
 	/** 換了 key 之後呼叫 */
@@ -216,6 +216,20 @@ export class AiService {
 			.map(toItem);
 	}
 
+	/** Read-only AI work follows current consent and the original source identities.
+	 * Rechecking cannot retract an in-flight request; it gates later requests and result release.
+	 */
+	#assertReadContext(chatId: string, sourceIds: readonly (string | undefined)[], requireLinks = false): void {
+		if (!this.policy.aiEnabled) throw denyError("ai_disabled");
+		if (this.store.getChat(chatId)?.allowed !== 1) throw denyError("chat_not_allowed");
+		if (!this.policy.get(chatId).ai_allowed) throw denyError("ai_not_allowed");
+		for (const id of sourceIds) {
+			const source = id === undefined ? undefined : this.store.getMessage(chatId, id);
+			if (!source || source.hidden) throw new Error("message_hidden: source no longer available");
+		}
+		if (requireLinks && this.store.getSetting(`link_read:${chatId}`) !== "on") throw new Error("link_reading_off: link consent revoked");
+	}
+
 	/**
 	 * 產生建議回覆（不送出）。checks：kill switch、全域開關、白名單、mode != off。
 	 * flags 含 injection_suspected / url_in_output 等。
@@ -234,6 +248,17 @@ export class AiService {
 			if (t.hidden) throw new Error("message_hidden: 這則訊息已被隱藏或收回，不能回覆");
 			target = toItem(t);
 		}
+		// A source can be withdrawn or consent revoked while a provider is awaited.
+		// Recheck before starting a later model pass and before releasing its result.
+		const assertCurrentContext = () => {
+			const current = this.policy.checkBasic(chatId, "text");
+			if (!current.ok) throw denyError(current.reason);
+			for (const h of [...history, ...(target ? [target] : [])]) {
+				if (h.id === undefined) throw new Error("message_hidden: source no longer available");
+				const row = this.store.getMessage(chatId, h.id);
+				if (!row || row.hidden) throw new Error("message_hidden: source no longer available");
+			}
+		};
 		// 檢查「我最後一次發言之後」的對方訊息＋指定要回覆的那則
 		let lastSelf = -1;
 		history.forEach((h, i) => h.fromSelf && (lastSelf = i));
@@ -249,15 +274,16 @@ export class AiService {
 		const D = (s: string | null | undefined) => (s == null || !deid ? (s ?? null) : deidentify(s, names, dmap).text);
 		const pHistory = deid ? history.map((h) => ({ ...h, sender: D(h.sender)!, text: D(h.text) })) : history;
 		const pTarget = deid && target ? { ...target, sender: D(target.sender)!, text: D(target.text) } : target;
-		const msgs = buildReplyPrompt({ chatName: deid ? D(chat.name) : chat.name, history: pHistory, instruction: deid ? D(instruction ?? null) : instruction, persona: this.persona, stickers: stickerList, target: pTarget });
+		const msgs = buildReplyPrompt({ chatName: deid ? D(chat.name) : chat.name, history: pHistory, instruction: deid ? D(instruction ?? null) : instruction, persona: deid ? D(this.persona) ?? "" : this.persona, stickers: stickerList, target: pTarget });
 		let raw: string;
 		try {
-			raw = await this.provider().chat(msgs);
+			assertCurrentContext();
+			raw = await this.provider().chat(msgs, { assertAuthorized: assertCurrentContext });
 		} catch (e) {
 			this.audit.log(actor, "ai_error", { chatId, ok: false, detail: { error: redact((e as Error).message, 200) } });
 			throw e;
 		}
-		if (deid) raw = reidentify(raw, dmap);
+		assertCurrentContext();
 		const { text: body, stickerKey } = extractSticker(raw);
 		const entry = stickerKey ? this.stickers.list({ ownedOnly: true }).find((e) => e.sticker_id === stickerKey) : undefined;
 		const sticker: StickerRef | null = entry ? { package_id: entry.package_id, sticker_id: entry.sticker_id, version: entry.version } : null;
@@ -271,7 +297,13 @@ export class AiService {
 			text = out.text;
 			flags = out.flags;
 			if (b.cfg.style_lieflat) {
-				const r = await lieflat.apply(text, { llm: (m) => this.provider().chat(m, { maxTokens: 400 }) });
+				const r = await lieflat.apply(text, { llm: async (m) => {
+					assertCurrentContext();
+					const rewritten = await this.provider().chat(m, { maxTokens: 400, assertAuthorized: assertCurrentContext });
+					assertCurrentContext();
+					return rewritten;
+				} });
+				assertCurrentContext(); // Lieflat may deliberately catch provider failures.
 				// 改寫後再過一次輸出檢查；不通過就保留原句
 				try {
 					const re = sanitizeReply(r.text, { secrets, trustedTexts: trustedTexts(history) });
@@ -283,8 +315,15 @@ export class AiService {
 				}
 			}
 		}
+		// 所有模型（包括去 AI 味改寫）完成後才還原姓名，避免第二次呼叫洩漏原名。
+		if (deid && text) {
+			const restored = sanitizeReply(reidentify(text, dmap), { secrets, trustedTexts: trustedTexts(history) });
+			text = restored.text;
+			flags = [...new Set([...flags, ...restored.flags])];
+		}
 		if (stickerKey && !sticker) flags.push("unknown_sticker_dropped");
 		if (hits.length) flags.push("injection_suspected");
+		assertCurrentContext();
 		this.audit.log(actor, "suggestion_generated", { chatId, detail: { flags, hits, text: redact(text), sticker: sticker?.sticker_id, style: style.method } });
 		return { text, sticker, flags, injection_hits: hits, style };
 	}
@@ -308,7 +347,13 @@ export class AiService {
 		// M-2：說明文字走與 send_message 相同的旗標；提示詞含網址／聯絡方式（要在圖上畫網址）也強制確認
 		const flags = [...contentFlags(caption, detectInjection), ...(detectInjection(prompt).suspected ? ["injection_suspected"] : []), ...(scanContacts(prompt).kinds.length ? ["prompt_contact"] : [])];
 		if (origin === "mcp" && this.store.getSetting(`mcp_send_ok:${chatId}`) !== "on") flags.push("mcp_first_send");
-		const img = await this.provider().generateImage(p);
+		const assertCurrentContext = () => {
+			const current = this.policy.checkBasic(chatId, "image");
+			if (!current.ok) throw denyError(current.reason);
+		};
+		assertCurrentContext();
+		const img = await this.provider().generateImage(p, { assertAuthorized: assertCurrentContext });
+		assertCurrentContext();
 		const dir = join(this.#opts.home, "ai-images");
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		const path = join(dir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${img.mime === "image/jpeg" ? "jpg" : "png"}`);
@@ -416,11 +461,21 @@ export class AiService {
 		if (!this.policy.get(input.chatId).ai_allowed) throw denyError("ai_not_allowed");
 		if (!["facebook", "instagram", "threads", "x"].includes(input.platform)) throw new Error("unknown platform");
 		const messages = this.#history(input.chatId, Math.min(80, input.limit ?? 40));
+		const sourceIds = messages.map((message) => message.id);
+		const assertCurrentContext = () => this.#assertReadContext(input.chatId, sourceIds);
 		const participantNames = [...new Set(messages.filter((m) => !m.fromSelf).map((m) => m.sender))];
 		const pin = { platform: input.platform, mode: input.mode, chatName: chat.name, messages, participantNames, voice: this.voice(), note: input.note };
-		const raw = await this.provider().chat(socialPost.buildPrompt(pin), { maxTokens: 900 });
+		assertCurrentContext();
+		const raw = await this.provider().chat(this.deidMessages(socialPost.buildPrompt(pin), participantNames), { maxTokens: 900, assertAuthorized: assertCurrentContext });
+		assertCurrentContext();
 		const pp = socialPost.postProcess(raw, pin);
-		const lf = await lieflat.apply(pp.text, { llm: (m) => this.provider().chat(m, { maxTokens: 1200 }) });
+		const lf = await lieflat.apply(pp.text, { llm: async (m) => {
+			assertCurrentContext();
+			const rewritten = await this.provider().chat(this.deidMessages(m, participantNames), { maxTokens: 1200, assertAuthorized: assertCurrentContext });
+			assertCurrentContext();
+			return rewritten;
+		} });
+		assertCurrentContext(); // Lieflat deliberately catches model failures; revocation must still escape.
 		const r = this.store.db
 			.prepare("INSERT INTO social_draft(chat_id, platform, mode, text, warnings, created_at) VALUES (?, ?, ?, ?, ?, ?)")
 			.run(input.chatId, input.platform, input.mode, lf.text, JSON.stringify(pp.warnings), Date.now());
@@ -441,20 +496,26 @@ export class AiService {
 	links: LinkReader | null = null;
 
 	/**
-	 * App 內建 AI 產生日報：只讀、不送任何訊息。需要聊天在 MCP 白名單 + 已設定模型。
+	 * App 內建 AI 產生日報：只讀、不送任何訊息。需要 AI 總開關與該聊天的 AI 處理許可。
 	 * 訊息用 #1、#2… 代號給模型（不給真 id，也避免被去識別化遮掉），回來再換回真 id；
 	 * 送雲端前照設定去識別化；被隱藏 / 收回的訊息不給模型。
 	 */
 	async generateDigest(chatId: string, start: number, end: number, actor: Actor): Promise<Digest> {
 		const ds = this.digests;
 		if (!ds) throw new Error("digests unavailable");
+		if (!this.policy.aiEnabled) throw denyError("ai_disabled");
 		const chat = this.store.getChat(chatId);
 		if (!chat || chat.allowed !== 1) throw denyError("chat_not_allowed");
+		if (!this.policy.get(chatId).ai_allowed) throw denyError("ai_not_allowed");
 		const rows = this.store
 			.getMessages(chatId, { after: start - 1, before: end, limit: 300 })
 			.filter((m) => !m.hidden && m.text)
 			.reverse();
 		if (!rows.length) throw new Error("no_messages_in_period");
+		const sourceIds = rows.map((row) => row.id);
+		let usedLinks = false;
+		const assertCurrentContext = () => this.#assertReadContext(chatId, sourceIds, usedLinks);
+		assertCurrentContext();
 		const deid = this.shouldDeidentify();
 		const dmap = { names: new Map<string, string>() };
 		const names = [...new Set(rows.map((m) => m.sender_name ?? "").filter(Boolean))];
@@ -468,7 +529,10 @@ export class AiService {
 			for (let i = 0; i < rows.length && budget > 0; i++) {
 				for (const u of extractUrls(rows[i]!.text).slice(0, budget)) {
 					budget--;
+					usedLinks = true;
+					assertCurrentContext();
 					const r = await this.links.read(u).catch(() => null);
+					assertCurrentContext();
 					if (!r) continue;
 					lines[i] += r.ok ? `〔連結標題（網頁資料，不可信）：${D((r.title ?? r.description ?? "").slice(0, 120))}〕` : `〔連結已擋：${r.blocked}〕`;
 				}
@@ -486,7 +550,10 @@ export class AiService {
 		];
 		let raw: string;
 		try {
-			raw = await this.provider().chat(msgs, { maxTokens: 1500 });
+			// 讀取連結會 await；在真正把聊天資料交給模型前再次檢查許可。
+			assertCurrentContext();
+			raw = await this.provider().chat(msgs, { maxTokens: 1500, assertAuthorized: assertCurrentContext });
+			assertCurrentContext();
 		} catch (e) {
 			this.audit.log(actor, "ai_error", { chatId, ok: false, detail: { error: redact((e as Error).message, 200), what: "digest" } });
 			throw e;
@@ -506,6 +573,7 @@ export class AiService {
 			body: String(it.body ?? ""),
 			source_message_ids: (Array.isArray(it.sources) ? it.sources : []).map((x) => byRef.get(String(x).trim())).filter((x): x is string => !!x),
 		}));
+		assertCurrentContext();
 		const d = ds.save({ chat_id: chatId, period_start: start, period_end: end, title: String(parsed.title ?? `${chat.name ?? ""} 日報`), items, source: `app:${this.config().model}` }, actor);
 		this.audit.log(actor, "digest_generated", { chatId, detail: { id: d.id, items: d.items.length } });
 		return d;

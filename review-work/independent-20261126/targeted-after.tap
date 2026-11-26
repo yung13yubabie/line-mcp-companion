@@ -1,0 +1,13 @@
+✔ 白名單：未勾選會話完全隔離 (32.614988ms)
+✔ get_messages 分頁與時間範圍 (5.023222ms)
+✔ 未讀摘要（本機計算）、附件下載快取、同步狀態、trigger_sync (20.424464ms)
+✔ MCP over HTTP（127.0.0.1 + Bearer token）端到端 (214.969811ms)
+✔ console entry points redact formatted objects, Error arguments and rotated credentials (107.341322ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 60455.269962

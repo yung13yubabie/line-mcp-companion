@@ -12,11 +12,11 @@
 - **MCP（Streamable HTTP）**：`127.0.0.1:47823/mcp`，Bearer token，只綁本機
 - **代聊二選一**（總控台切換）
   - **由連接器代聊**：外部 AI（Claude、ChatGPT…）經 MCP 的 `send_message` 回覆，App 不需要 API key
-  - **App 內建 AI**：任何 OpenAI 相容端點（OpenAI / Grok / 本機 llama-server…）＋備援模型鏈；送雲端前預設去識別化（人名、電話、帳號…）
+  - **App 內建 AI**：OpenAI 相容端點＋備援模型鏈；涉及雲端的整條模型鏈預設先去識別化，涵蓋社群草稿與第二輪改寫。規則可能漏掉個資，開啟雲端模型或 MCP 連接器仍會把允許的內容提供給對應服務。
 - **雲端連接器**（預設關）：ChatGPT / Claude / Grok / Gemini 的自訂 MCP 連接器 — OAuth 2.1（DCR + PKCE + App 內配對碼）、Streamable HTTP + 舊版 SSE、可選 Cloudflare 通道，見 [docs/connectors.md](docs/connectors.md)
 - **信任狀態**：每個聊天的 AI 回覆、反詐提醒各自「審核（預設）→ 自動」，一鍵降回；緊急停止全部降回
 - **安全預設**：AI 代聊有自己的白名單（要同時在 MCP 白名單）、確認佇列（可改字 / 貼圖再送）、頻率 / 每日上限、活躍時段、緊急停止、稽核紀錄、提示注入防護；被隱藏 / 收回的訊息不回、不當脈絡
-- **紀錄**：反詐與 AI 代聊紀錄（加密保存、可篩選、匯出 CSV、保留天數、清除）
+- **紀錄**：反詐與 AI 代聊紀錄（敏感欄位加密、可篩選、匯出 CSV、保留天數、清除）。全文索引、附件與部分中繼資料仍存於 App 私有空間，並非全庫或全檔加密。
 - **長按訊息回覆這則**：引用回覆，可請 AI 擬一句，或回你用過的貼圖
 - **去 AI 味**：送出前把太像 AI 的句子改自然（Lieflat 規則，每個聊天可關）
 - **反詐雷達**：本機規則 + 可擴充範例庫，不需要 AI；可選擇在群組即時引用回覆提醒並 @ 管理員（每群預設關）
@@ -40,14 +40,33 @@
 
 ## 安裝（側載）
 
-1. 下載對應的 APK：真機用 `arm64-v8a`，模擬器用 `x86_64`
-2. 確認簽章（release 版）：
+### 0.3.1 修復驗證版
+
+[Android review APK workflow](https://github.com/yung13yubabie/line-mcp-companion/actions/workflows/android-review.yml) 會對 PR／修復分支建立兩種 APK；在成功執行的 Artifacts 下載 `line-mcp-companion-review-<commit>`。
+
+| 項目 | Review APK |
+| --- | --- |
+| 版本／套件 | `0.3.1-review`／`tw.linemcp.app.review` |
+| 適用 ABI | `arm64-v8a` 真機；`x86_64` 相容模擬器 |
+| 簽章 | 測試簽章；每次乾淨 CI 可能不同，核對同份 artifact 的簽章報告 |
+| 本機連接埠 | MCP `47833`、control `47834`、connector `47835` |
+| 資料 | 與既有正式 App 分開；不會覆蓋或遷移舊資料 |
+| Mock／debug | release bundle 已移除 Mock；`debuggable=false` |
+
+這是尚未完成正式發布驗收的修復驗證版。使用測試帳號與非敏感資料；尚未完成真機 LINE 登入、背景生命週期與雲端連接器端到端驗證。它使用非正式簽章，不能當成舊版 App 的覆蓋更新。
+
+目前固定的原生套件包含已停止支援的 OpenSSL 3.6.5。`assembleRelease`／`bundleRelease` 會拒絕此 runtime，須先更換為受支援且完成覆驗的版本，再使用原正式簽章金鑰。詳見 [安全修復與發布限制](docs/security-update-2026-11-25.md) 及 [原生建置說明](docs/android-build.md)。
+
+### 正式版簽章核對
+
+1. 下載對應 ABI 的 APK，核對同次發布提供的 SHA-256。
+2. 檢查簽章：
 
    ```
-   apksigner verify --print-certs line-mcp-app-0.2.1-arm64-v8a-release.apk
+   apksigner verify --verbose --print-certs <release.apk>
    ```
 
-   憑證 SHA-256 必須是：
+   既有專案記錄的正式簽章憑證 SHA-256 為下列值。本次未取得原 keystore，沒有產生使用此憑證的正式更新 APK；Review APK 不使用它。
 
    ```
    75:E7:2F:E9:BC:01:B9:E8:9F:78:A9:42:53:12:58:1C:1D:4D:AA:92:E9:CB:E2:14:63:F8:76:18:97:EC:A9:0A
@@ -58,22 +77,26 @@
 
 ## 開發
 
-需要 Node 24、Bun（打包）、Android SDK。
+需要 Node `24.22.3`、Bun `1.4.5`、JDK 17 以上（本輪使用 Temurin 21）、Android SDK 35／Build Tools 35.0.0。原生套件準備目前支援 Linux x86_64，另需 Python 3.12、GnuPG、`dpkg-deb` 與 `readelf`。
 
 ```
-npm install
+npm ci --ignore-scripts --no-audit --no-fund
 npm test                       # 單元 / 端到端測試（全部假資料，不連 LINE、不呼叫 AI）
 npm run typecheck
 LMA_PASSPHRASE='至少 12 個字的密語' npm start   # 桌面執行；沒設 token 會自動產生並只印一次
+npm run native:android         # 驗證簽署索引、下載固定套件、重包並驗證 native hashes
 npm run android:debug          # debug APK（含 Mock 模式）
-npm run android:release        # release APK（移除 Mock，需 release keystore）
+npm run android:review         # 獨立 package、測試簽章、移除 Mock 的 Review APK
+npm run android:release        # 需受支援且核准的 runtime，以及相同正式 keystore
 ```
 
 - 桌面模式必須設 `LMA_PASSPHRASE`（加密 LINE token / E2EE 金鑰），否則拒絕啟動
-- release 簽章：keystore 放在 repo 外（預設 `../keys/release.jks` + 權限 0600 的 `../keys/keystore.pass`，可用 `LMA_KEYSTORE` / `LMA_KEYSTORE_PASS_FILE` 覆寫）；找不到就不簽，不會退回 debug 金鑰
+- release 簽章：keystore 放在 repo 外（預設 `../keys/release.jks` + `../keys/keystore.pass`，兩者限擁有者可讀）；可用 `LMA_KEYSTORE`／`LMA_KEYSTORE_PASS_FILE` 覆寫。缺檔、權限過寬、alias 或憑證指紋不符，建置會失敗。
 - Mock 模式（只在 debug 版）：設定 → 開發者 → Mock 模式，完全離線的假資料，見 [docs/mock-mode.md](docs/mock-mode.md)
 
 安全設計與威脅模型：[docs/SECURITY-REVIEW-BRIEF.md](docs/SECURITY-REVIEW-BRIEF.md)
+
+0.3.1 安全修復與未解風險：[docs/security-update-2026-11-25.md](docs/security-update-2026-11-25.md)。後續獨立審查依 [資安審查規程](docs/security-review-process.md) 執行；自動測試通過不能替代獨立覆核或真機驗收。
 
 ## 授權
 

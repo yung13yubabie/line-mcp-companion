@@ -202,7 +202,7 @@ export class ScamWarner {
 	#sendCheck(it: OutboxItem): string | null {
 		const c = this.get(it.chat_id);
 		if (!c.enabled) return "scam_warn_disabled";
-		const sent = Number((this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND status='sent' AND sent_at >= ?").get(it.chat_id, this.#sod()) as { n: number }).n);
+		const sent = Number((this.#store.db.prepare("SELECT COUNT(*) AS n FROM outbox WHERE origin='scam_warn' AND chat_id=? AND sent_at IS NOT NULL AND sent_at >= ?").get(it.chat_id, this.#sod()) as { n: number }).n);
 		return sent >= c.daily_cap ? "scam_warn_daily_cap" : null;
 	}
 

@@ -98,15 +98,15 @@ function runMain(env: Record<string, string>, waitFor: RegExp, ms = 15000): Prom
 
 test("桌面啟動：沒有資料金鑰 → 拒絕（exit 78）；沒有 token → 自動產生、只印一次、只綁 127.0.0.1", async () => {
 	const home = mkdtempSync(join(tmpdir(), "lma-main-"));
-	const r1 = await runMain({ LINE_MCP_HOME: home, LINE_MCP_PORT: "0", LINE_CONTROL_PORT: "0" }, /ready/);
+	const r1 = await runMain({ LINE_MCP_HOME: home, LINE_MCP_PORT: "0", LINE_CONTROL_PORT: "0", LINE_CONNECTOR_PORT: "0" }, /ready/);
 	assert.equal(r1.code, 78, r1.out);
 	assert.match(r1.out, /refusing to start: no data key/);
-	const r2 = await runMain({ LINE_MCP_HOME: home, LINE_MCP_PORT: "0", LINE_CONTROL_PORT: "0", LMA_PASSPHRASE: "correct horse battery staple" }, /"event":"ready"/);
+	const r2 = await runMain({ LINE_MCP_HOME: home, LINE_MCP_PORT: "0", LINE_CONTROL_PORT: "0", LINE_CONNECTOR_PORT: "0", LMA_PASSPHRASE: "correct horse battery staple" }, /"event":"ready"/);
 	const gen = r2.out.match(/"generated_token"/g) ?? [];
 	assert.equal(gen.length, 2, r2.out);
 	assert.match(r2.out, /"mcp":"http:\/\/127\.0\.0\.1:\d+\/mcp"/);
 	assert.match(r2.out, /"control":"http:\/\/127\.0\.0\.1:\d+\/control"/);
 	// 錯的 passphrase → 拒絕
-	const r3 = await runMain({ LINE_MCP_HOME: home, LINE_MCP_PORT: "0", LINE_CONTROL_PORT: "0", LMA_PASSPHRASE: "wrong passphrase here" }, /"event":"ready"/);
+	const r3 = await runMain({ LINE_MCP_HOME: home, LINE_MCP_PORT: "0", LINE_CONTROL_PORT: "0", LINE_CONNECTOR_PORT: "0", LMA_PASSPHRASE: "wrong passphrase here" }, /"event":"ready"/);
 	assert.equal(r3.code, 78, r3.out);
 });

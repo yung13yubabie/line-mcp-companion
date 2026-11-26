@@ -1,6 +1,6 @@
 {
   "name": "line-mcp-app",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "LINE 次要裝置同步 + 本機 MCP（Android App 核心）",
   "scripts": {
     "test": "node --test test/*.test.ts",
@@ -9,10 +9,13 @@
     "typecheck": "tsc --noEmit",
     "bundle:android": "bun scripts/bundle.ts",
     "android:debug": "npm run bundle:android && cd android && ./gradlew assembleDebug",
+    "native:android": "python3 scripts/node-android/native-runtime.py prepare",
+    "android:review": "npm run native:android && npm run bundle:android:release && cd android && ./gradlew assembleReview",
     "start": "node src/main.ts",
     "bundle:android:release": "bun scripts/bundle.ts --release && bash scripts/purge-mock-check.sh android/app/src/main/assets/nodeapp/main.mjs",
     "android:release": "npm run bundle:android:release && cd android && ./gradlew assembleRelease && for f in app/build/outputs/apk/release/*.apk; do bash ../scripts/purge-mock-check.sh $f; done",
-    "mcp:interop": "node scripts/mcp-interop.mjs"
+    "mcp:interop": "node scripts/mcp-interop.mjs",
+    "test:review": "node --test review-work/independent-20261126/*.test.mjs"
   },
   "license": "Apache-2.0",
   "type": "module",

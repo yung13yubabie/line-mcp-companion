@@ -636,6 +636,7 @@ test("日報：MCP 寫回（驗證來源屬於該聊天、白名單、去 HTML�
 	assert.equal(plainText("a\u202eb<i>c</i>", 10), "abc");
 	// App 內建 AI 產生：模型拿到 #代號、不拿到隱藏訊息；回來換成真 id
 	policy.setAiEnabled(true);
+	policy.set(A, { ai_allowed: true }); // 此測試明確允許這個聊天交給 App AI 處理
 	provider.reply = '好的 {"title":"晚餐討論","items":[{"headline":"七點吃晚餐","body":"約七點","sources":["#1","#2","#99"]}]}';
 	const g = await ai_generate(ctx, A);
 	assert.equal(g.title, "晚餐討論");

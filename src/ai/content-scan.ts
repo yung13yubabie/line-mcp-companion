@@ -27,7 +27,8 @@ export function normalizeForScan(s: string | null | undefined): string {
 }
 
 // 不當作網域的副檔名（降低「report.pdf」這類誤報）
-const FILE_EXT = new Set(["txt", "jpg", "jpeg", "png", "gif", "webp", "heic", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "zip", "rar", "mp3", "mp4", "mov", "js", "ts", "json", "md", "html", "exe", "apk", "kt"]);
+// zip / mov / md 同時也是公開 TLD，不可無條件當檔名略過。
+const FILE_EXT = new Set(["txt", "jpg", "jpeg", "png", "gif", "webp", "heic", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "rar", "mp3", "mp4", "js", "ts", "json", "html", "exe", "apk", "kt"]);
 
 const RE = {
 	url: /\b(?:[a-z][a-z0-9+.-]{1,15}):\/\/[^\s]+/gi,
@@ -102,6 +103,7 @@ export function linksNotIn(output: string, trusted: string[]): boolean {
 		...out.matchAll(new RegExp(RE.url.source, "gi")),
 		...out.matchAll(new RegExp(RE.www.source, "gi")),
 		...out.matchAll(new RegExp(RE.ipv4.source, "g")),
+		...out.matchAll(new RegExp(RE.ipv6.source, "gi")),
 		...[...out.matchAll(new RegExp(RE.domain.source, "gi"))].filter((m) => domainLike(m[0], m[1]!)),
 	].map((m) => m[0].replace(/[)\]}>.,!?;:'"」』）]+$/, ""));
 	return found.some((f) => !pool.includes(f));

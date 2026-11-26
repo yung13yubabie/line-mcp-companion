@@ -8,8 +8,8 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import java.net.HttpURLConnection
-import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 /**
@@ -19,10 +19,9 @@ import java.util.concurrent.TimeUnit
 class KeepaliveWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val alive = runCatching {
-            val c = URL("http://127.0.0.1:47824/control/state").openConnection() as HttpURLConnection
-            c.connectTimeout = 2000; c.readTimeout = 2000
-            c.responseCode // 401 也代表活著
-            true
+            withContext(Dispatchers.IO) {
+                ControlClient(Secrets.controlToken(applicationContext)).health()
+            }
         }.getOrDefault(false)
         if (!alive) runCatching {
             val i = Intent(applicationContext, NodeService::class.java)

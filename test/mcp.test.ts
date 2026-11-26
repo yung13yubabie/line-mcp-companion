@@ -9,7 +9,7 @@ import { openDatabase } from "../src/storage/db.ts";
 import { Whitelist } from "../src/whitelist.ts";
 import { SyncEngine } from "../src/sync/engine.ts";
 import { MediaCache } from "../src/media/cache.ts";
-import { callTool, BASIC_TOOLS } from "../src/mcp/tools.ts";
+import { callTool, BASIC_TOOLS, READ_ONLY_TOOLS } from "../src/mcp/tools.ts";
 import { startMcpHttp } from "../src/mcp/server.ts";
 import { FakeSource, ALICE, GROUP, SECRET, msg } from "./fake-source.ts";
 
@@ -107,7 +107,7 @@ test("MCP over HTTP（127.0.0.1 + Bearer token）端到端", async () => {
 		const client = new Client({ name: "test", version: "0" });
 		await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: "Bearer test-token-0123456789" } } }));
 		const { tools } = await client.listTools();
-		assert.deepEqual(tools.map((t) => t.name).sort(), [...BASIC_TOOLS, "search", "fetch"].sort());
+		assert.deepEqual(tools.map((t) => t.name).sort(), [...BASIC_TOOLS, "search", "fetch"].filter((name) => READ_ONLY_TOOLS.has(name)).sort());
 		assert.equal(tools.find((t) => t.name === "search")!.annotations?.readOnlyHint, true);
 		// ChatGPT 相容 search / fetch
 		const sr = JSON.parse(((await client.callTool({ name: "search", arguments: { query: "便當" } })) as { content: { text: string }[] }).content[0]!.text);

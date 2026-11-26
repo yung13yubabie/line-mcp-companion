@@ -1,6 +1,6 @@
 /**
  * App 內部控制 API（給 Kotlin UI 用，不是給 AI）：登入、會話與白名單、AI 設定、確認佇列、總控台、反詐、社群貼文草稿。
- * 只綁 127.0.0.1，必須帶 Bearer token（由 Android Service 產生、經環境變數傳入；timing-safe 比對）。
+ * 只綁 127.0.0.1。Android 使用 HMAC 簽章；桌面可使用 Bearer 相容模式（timing-safe 比對）。
  * 請求本體上限 256KB；拒絕帶 Origin 的請求（瀏覽器網頁不能呼叫）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -26,6 +26,8 @@ import { CATEGORY_TIPS } from "../scam/rules.ts";
 import type { McpStats } from "../mcp/server.ts";
 import { toCsv, SCAM_CSV_COLS, AI_CSV_COLS, type EventLog } from "../storage/event-log.ts";
 import type { TrustFeature, TrustState } from "../ai/policy.ts";
+import { Audit } from "../ai/audit.ts";
+import { AuthFailureBudget, ControlReplayWindow, type AuthFailureReason } from "./security.ts";
 
 export interface LoginState {
 	phase: "logged_out" | "waiting_qr_scan" | "waiting_pin" | "online" | "error";
@@ -112,7 +114,7 @@ function hostOk(req: IncomingMessage): boolean {
 /**
  * 伺服器身分證明（防 loopback 埠被其他 App 搶佔）：UI 先用隨機 nonce 呼叫 GET /control/hello（不帶 token），
  * 伺服器回 x-lma-proof = HMAC-SHA256(controlToken, "hello:"+nonce)。只有持有 token 的正牌 Node 算得出來；
- * UI 驗證通過才送出帶 Bearer token 的請求。之後每個回應也帶 HMAC(token, "resp:"+nonce)，UI 可拒絕偽造的回應（例如假 QR）。
+ * UI 驗證通過才送出 HMAC 簽章請求。之後所有回應綁 method、path、status 和完整 body。
  */
 const NONCE_RE = /^[0-9a-f]{32,128}$/;
 export function controlProof(token: string, msg: string): string {
@@ -145,23 +147,18 @@ const sha256hex = (b: Buffer | string) => createHash("sha256").update(b).digest(
  * 本體若含秘密（例如 AI 金鑰）以 AES-256-GCM 加密（x-lma-enc: 1；金鑰 = HMAC(token, "body:"+nonce)，AAD = METHOD:path）。
  * 冒牌伺服器即使搶到埠，也只拿到一次性簽章與密文，拿不到 token 或金鑰。nonce 2 分鐘內不可重用，時間差 ±2 分鐘。
  */
-const seenNonces = new Map<string, number>();
-const AUTH_SKEW = 120_000;
-function hmacAuthOk(req: IncomingMessage, token: string, raw: Buffer, nonce: string | null): boolean {
+function hmacAuth(req: IncomingMessage, token: string, raw: Buffer, nonce: string | null, replay: ControlReplayWindow): { ok: true } | { ok: false; reason: AuthFailureReason } {
 	const h = req.headers["x-lma-auth"];
-	if (typeof h !== "string" || !nonce || !NONCE_RE.test(nonce)) return false;
+	if (typeof h !== "string" || !nonce || !NONCE_RE.test(nonce)) return { ok: false, reason: "unauthorized" };
 	const m = /^v1 (\d{10,16})\.([0-9a-f]{64})$/.exec(h.trim());
-	if (!m) return false;
+	if (!m) return { ok: false, reason: "unauthorized" };
 	const ts = Number(m[1]);
-	const now = Date.now();
-	if (Math.abs(now - ts) > AUTH_SKEW) return false;
+	if (!replay.validTimestamp(ts)) return { ok: false, reason: "expired" };
 	const want = Buffer.from(controlProof(token, `req:${nonce}:${ts}:${req.method}:${req.url ?? ""}:${sha256hex(raw)}`));
 	const got = Buffer.from(m[2]!);
-	if (got.length !== want.length || !timingSafeEqual(got, want)) return false;
-	for (const [k, t] of seenNonces) if (t < now - AUTH_SKEW) seenNonces.delete(k);
-	if (seenNonces.has(nonce)) return false; // 重放
-	seenNonces.set(nonce, now);
-	return true;
+	if (got.length !== want.length || !timingSafeEqual(got, want)) return { ok: false, reason: "unauthorized" };
+	if (!replay.consume(nonce, ts)) return { ok: false, reason: "replay" };
+	return { ok: true };
 }
 
 export function decryptControlBody(token: string, nonce: string, method: string, path: string, raw: Buffer): Buffer {
@@ -206,9 +203,21 @@ export function cancelWarnings(ai: AiService, chatId: string, messageId: string,
 	return rows.length;
 }
 
-export async function startControlHttp(deps: ControlDeps, opts: { port?: number; token: string; /** Android：只接受 HMAC 簽章（UI 從不送 Bearer） */ hmacOnly?: boolean }): Promise<{ server: Server; url: string }> {
+export async function startControlHttp(deps: ControlDeps, opts: { port?: number; token: string; /** Android：只接受 HMAC 簽章（UI 從不送 Bearer） */ hmacOnly?: boolean; authFailureRatePerMin?: number }): Promise<{ server: Server; url: string }> {
 	if (!opts.token || opts.token.length < 16) throw new Error("control token is required (>= 16 chars)");
 	const { store } = deps;
+	const controlAudit = deps.ai?.audit ?? new Audit(store);
+	const replay = new ControlReplayWindow();
+	const authFailures = new AuthFailureBudget({
+		perMinute: opts.authFailureRatePerMin,
+		report: (summary) => controlAudit.logSecurity("system", "control_auth_failures", { ...summary }),
+	});
+	const responseProof = new WeakMap<ServerResponse, (code: number, bytes: Buffer) => void>();
+	const sendBytes = (res: ServerResponse, code: number, body: string | Uint8Array, headers: Record<string, string> = {}) => {
+		const bytes = Buffer.from(body);
+		responseProof.get(res)?.(code, bytes);
+		res.writeHead(code, headers).end(bytes);
+	};
 	const startOfDay = () => {
 		const d = new Date();
 		d.setHours(0, 0, 0, 0);
@@ -260,11 +269,12 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 						.map((c) => ({ ...c, warn_enabled: deps.warner?.get(c.chat_id).enabled ?? false, scam_trust: ai.policy.trust(c.chat_id, "scam") }))
 				: [],
 			trust_log: ai?.policy.trustLog(20) ?? [],
+			mcp_allow_write: store.getSetting("mcp_allow_write") === "on",
 			mcp_allow_promote: store.getSetting("mcp_allow_promote") === "on",
 			mcp_allow_approve: store.getSetting("mcp_allow_approve") === "on",
 			mcp: deps.mcpStats?.() ?? null,
 			scam: deps.scam ? { enabled: deps.scam.enabled, ai: deps.scam.aiEnabled, today: deps.scam.counts(sod), recent: deps.scam.alerts({ limit: 5 }), warnings: deps.warner?.log(10) ?? [] } : null,
-			audit: ai?.audit.recent({ limit: 30 }) ?? [],
+			audit: controlAudit.recent({ limit: 30, includeSecurity: true }),
 		};
 	}
 
@@ -272,11 +282,13 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 	const routes: Record<string, Handler> = {
 		// ---- 登入 / 會話 ----
 		"GET /control/state": () => deps.login(),
+		"GET /control/health": () => ({ ok: true }),
+		"GET /control/security": () => ({ authentication: authFailures.snapshot(), recent: controlAudit.securityRecent(50) }),
 		"POST /control/login/qr": () => {
 			deps.startQrLogin();
 			return deps.login();
 		},
-		"GET /control/info": () => deps.info?.() ?? {},
+		"GET /control/info": () => ({ ...deps.info?.(), mcp_allow_write: store.getSetting("mcp_allow_write") === "on" }),
 		"GET /control/chats": () =>
 			store.listChats().map((c) => {
 				const last = store.getMessages(c.id, { limit: 1 })[0];
@@ -409,13 +421,13 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 		"GET /control/trust/log": (url) => need(deps.ai, "AI").policy.trustLog(Number(url.searchParams.get("limit") ?? 100), url.searchParams.get("chat_id") || undefined),
 		"POST /control/mcp/permissions": async (_u, req) => {
 			const b = await body(req);
-			for (const k of ["mcp_allow_promote", "mcp_allow_approve"] as const) {
+			for (const k of ["mcp_allow_write", "mcp_allow_promote", "mcp_allow_approve"] as const) {
 				if (b[k] !== undefined) {
 					store.setSetting(k, b[k] === true ? "on" : "off");
 					deps.ai?.audit.log("ui", `${k}_${b[k] === true ? "on" : "off"}`);
 				}
 			}
-			return { mcp_allow_promote: store.getSetting("mcp_allow_promote") === "on", mcp_allow_approve: store.getSetting("mcp_allow_approve") === "on" };
+			return { mcp_allow_write: store.getSetting("mcp_allow_write") === "on", mcp_allow_promote: store.getSetting("mcp_allow_promote") === "on", mcp_allow_approve: store.getSetting("mcp_allow_approve") === "on" };
 		},
 
 		// ---- 紀錄（加密保存；可篩選 / 匯出 CSV / 清除）----
@@ -424,7 +436,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const rows = ev.scamList({ ...logFilter(url), action: url.searchParams.get("action") || undefined, category: url.searchParams.get("category") || undefined });
 			if (url.searchParams.get("format") === "csv") {
 				deps.ai?.audit.log("ui", "scam_log_exported", { detail: { rows: rows.length } });
-				res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" }).end(toCsv(rows as never, SCAM_CSV_COLS));
+				sendBytes(res, 200, toCsv(rows as never, SCAM_CSV_COLS), { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" });
 				return undefined;
 			}
 			return rows;
@@ -434,7 +446,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const rows = ev.aiList({ ...logFilter(url), event: url.searchParams.get("event") || undefined });
 			if (url.searchParams.get("format") === "csv") {
 				deps.ai?.audit.log("ui", "ai_log_exported", { detail: { rows: rows.length } });
-				res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" }).end(toCsv(rows as never, AI_CSV_COLS));
+				sendBytes(res, 200, toCsv(rows as never, AI_CSV_COLS), { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" });
 				return undefined;
 			}
 			return rows;
@@ -459,7 +471,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 		"GET /control/outbox_image": (url, _r, res) => {
 			const it = need(deps.ai, "AI").outbox.get(Number(url.searchParams.get("id")));
 			if (!it?.image_path) throw new HttpError(404, "no image");
-			res.writeHead(200, { "content-type": "image/png", "cache-control": "no-store" }).end(readFileSync(it.image_path));
+			sendBytes(res, 200, readFileSync(it.image_path), { "content-type": "image/png", "cache-control": "no-store" });
 			return undefined;
 		},
 		"POST /control/suggest": async (_u, req) => {
@@ -482,7 +494,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const b = await body(req);
 			return need(deps.ai, "AI").imageToQueue(String(b.chat_id ?? ""), String(b.prompt ?? "").slice(0, 1000), b.caption == null ? null : String(b.caption).slice(0, 500), "ui", "ui");
 		},
-		"GET /control/audit": (url) => need(deps.ai, "AI").audit.recent({ limit: Math.min(500, Number(url.searchParams.get("limit") ?? 100)) }),
+		"GET /control/audit": (url) => controlAudit.recent({ limit: Math.min(500, Number(url.searchParams.get("limit") ?? 100)), includeSecurity: true }),
 
 		// ---- 貼圖 ----
 		"GET /control/stickers": () => need(deps.ai, "AI").stickers.list({ limit: 200 }),
@@ -495,7 +507,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			const id = url.searchParams.get("id") ?? "";
 			if (!/^\d{1,12}$/.test(id)) throw new HttpError(400, "bad id");
 			const img = await need(deps.stickerImage, "sticker images")(id);
-			res.writeHead(200, { "content-type": img.mime, "cache-control": "max-age=86400" }).end(img.bytes);
+			sendBytes(res, 200, img.bytes, { "content-type": img.mime, "cache-control": "no-store" });
 			return undefined;
 		},
 
@@ -760,41 +772,44 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 	};
 
 	const server = createServer(async (req, res) => {
-		let proofFor: ((code: number, json: string) => void) | null = null;
 		const send = (code: number, v: unknown) => {
 			if (res.headersSent) return;
 			const json = JSON.stringify(v ?? null);
-			proofFor?.(code, json);
-			res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(json);
+			sendBytes(res, code, json, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
 		};
-		if (req.headers.origin || !hostOk(req)) return send(403, { error: "forbidden" });
+		const reject = (reason: AuthFailureReason, status: number, error: string) => {
+			const allowed = authFailures.reject(reason);
+			if (!allowed) res.setHeader("retry-after", "60");
+			return send(allowed ? status : 429, { error: allowed ? error : "auth_rate_limited" });
+		};
+		if (req.headers.origin || !hostOk(req)) return reject("forbidden", 403, "forbidden");
 		const nonce = typeof req.headers["x-lma-nonce"] === "string" ? req.headers["x-lma-nonce"].toLowerCase() : null;
 		if (req.method === "GET" && (req.url ?? "").split("?")[0] === "/control/hello") {
-			if (!nonce || !NONCE_RE.test(nonce)) return send(400, { error: "bad nonce" });
+			if (!nonce || !NONCE_RE.test(nonce)) return reject("invalid_request", 400, "bad nonce");
 			res.setHeader("x-lma-proof", controlProof(opts.token, `hello:${nonce}`));
 			return send(200, { ok: true });
 		}
+		// Missing credentials are rejected without collecting a request body. Valid Bearer remains desktop-only compatibility.
+		const hasHmac = typeof req.headers["x-lma-auth"] === "string" && !!nonce && NONCE_RE.test(nonce);
+		const viaBearer = !opts.hmacOnly && tokenOk(req, opts.token);
+		if (!hasHmac && !viaBearer) return reject("unauthorized", 401, "unauthorized");
 		let raw: Buffer;
 		try {
 			raw = await readRaw(req);
 		} catch (e) {
-			return send(e instanceof HttpError ? e.status : 400, { error: (e as Error).message });
+			return reject("invalid_request", e instanceof HttpError ? e.status : 400, "invalid request body");
 		}
-		const viaHmac = hmacAuthOk(req, opts.token, raw, nonce);
-		if (!viaHmac && (opts.hmacOnly || !tokenOk(req, opts.token))) return send(401, { error: "unauthorized" });
-		// 回應證明綁 nonce + method + path + status（+ JSON 本體雜湊）：UI 驗證後才採用回應（防假 QR / 假資料）
+		const auth = hmacAuth(req, opts.token, raw, nonce, replay);
+		const viaHmac = auth.ok;
+		if (!viaHmac && !viaBearer) return reject(auth.reason, 401, "unauthorized");
+		// Every response body is bound, including CSV and images. There is no unsigned-body fallback.
 		if (nonce && NONCE_RE.test(nonce)) {
 			const n = nonce;
 			const base = `resp:${n}:${req.method}:${req.url ?? ""}`;
-			const wh = res.writeHead.bind(res) as (...a: unknown[]) => ServerResponse;
-			(res as unknown as { writeHead: (...a: unknown[]) => ServerResponse }).writeHead = (code: unknown, ...rest: unknown[]) => {
-				if (!res.hasHeader("x-lma-proof")) res.setHeader("x-lma-proof", controlProof(opts.token, `${base}:${code}:-`));
-				return wh(code, ...rest);
-			};
-			proofFor = (code, json) => {
-				res.setHeader("x-lma-proof", controlProof(opts.token, `${base}:${code}:${sha256hex(json)}`));
+			responseProof.set(res, (code, bytes) => {
+				res.setHeader("x-lma-proof", controlProof(opts.token, `${base}:${code}:${sha256hex(bytes)}`));
 				res.setHeader("x-lma-proof-body", "1");
-			};
+			});
 		}
 		try {
 			if (req.headers["x-lma-enc"] === "1") {
@@ -814,9 +829,13 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			return send(500, { error: (e as Error).message });
 		}
 	});
+	server.maxConnections = 64;
 	server.headersTimeout = 10_000;
 	server.requestTimeout = 120_000;
 	await listenLoopback(server, opts.port ?? 47824, "127.0.0.1");
+	const authFlush = setInterval(() => authFailures.flush(), 60_000);
+	authFlush.unref();
+	server.once("close", () => clearInterval(authFlush));
 	const a = server.address();
 	return { server, url: `http://127.0.0.1:${typeof a === "object" && a ? a.port : opts.port}/control` };
 }

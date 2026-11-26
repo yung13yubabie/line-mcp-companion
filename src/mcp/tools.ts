@@ -122,7 +122,7 @@ export function mcpSendFlags(text: string | null): string[] {
 }
 
 function view(m: MessageRow) {
-	const inj = m.from_self === 1 ? [] : detectInjection(m.text).hits;
+	const inj = m.hidden || m.from_self === 1 ? [] : detectInjection(m.text).hits;
 	return {
 		...(inj.length ? { injection_flags: inj } : {}),
 		chat_id: m.chat_id,
@@ -134,7 +134,7 @@ function view(m: MessageRow) {
 		// 被隱藏 / 收回的訊息不回傳內容，也不能回覆
 		text: m.hidden ? null : m.text,
 		hidden: m.hidden ? m.hidden : undefined,
-		media: m.content_type !== "NONE" ? { name: m.media_name, size: m.media_size } : undefined,
+		media: !m.hidden && m.content_type !== "NONE" ? { name: m.media_name, size: m.media_size } : undefined,
 		decrypt_state: m.decrypt_state === "plain" || m.decrypt_state === "decrypted" ? undefined : m.decrypt_state,
 	};
 }
@@ -316,7 +316,9 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 		case "get_ai_log": {
 			const ev = need(ctx.events, "logs");
 			if (args.chat_id !== undefined) whitelist.assert(String(args.chat_id));
-			return ev.aiList({ allowedOnly: true, chatId: args.chat_id === undefined ? undefined : String(args.chat_id), since: toMs(args.since), until: toMs(args.until), event: args.event == null ? undefined : String(args.event), limit: args.limit === undefined ? 100 : Math.min(500, Number(args.limit)) });
+			// Keep local audit history, but do not expose snapshots of withdrawn sources through MCP.
+			return ev.aiList({ allowedOnly: true, chatId: args.chat_id === undefined ? undefined : String(args.chat_id), since: toMs(args.since), until: toMs(args.until), event: args.event == null ? undefined : String(args.event), limit: args.limit === undefined ? 100 : Math.min(500, Number(args.limit)) })
+				.filter((r) => !r.trigger_msg_id || !store.isHidden(r.chat_id, r.trigger_msg_id));
 		}
 
 		// ---- 反詐：自訂提醒 / 誤判 / 信任成員 / 紀錄 ----
@@ -370,7 +372,7 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 				action: args.action == null ? undefined : String(args.action),
 				category: args.category == null ? undefined : String(args.category),
 				limit: args.limit === undefined ? 100 : Math.min(500, Number(args.limit)),
-			});
+			}).filter((r) => !store.isHidden(r.chat_id, r.message_id));
 		}
 
 		case "get_messages": {
@@ -400,6 +402,7 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 			whitelist.assert(chatId);
 			const m = store.getMessage(chatId, String(args.message_id ?? ""));
 			if (!m) throw new Error("message not found");
+			if (m.hidden) throw new Error("message_hidden");
 			const cached = ctx.media?.cached(chatId, m.id);
 			return {
 				...view(m),
@@ -414,6 +417,11 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 			whitelist.assert(chatId);
 			if (!ctx.media) throw new Error("media cache not configured");
 			const r = await ctx.media.ensure(chatId, String(args.message_id ?? ""));
+			// 初次授權之後，下載等待期間可能撤銷白名單或收回訊息。
+			whitelist.assert(chatId);
+			const current = store.getMessage(chatId, String(args.message_id ?? ""));
+			if (!current) throw new Error("message not found");
+			if (current.hidden) throw new Error("message_hidden");
 			// 不回傳絕對路徑（避免洩漏 App 私有目錄結構）；要內容請用 inline=true
 			const out: Record<string, unknown> = { file: ctx.media.relative(r.path), mime: r.mime, size: r.size, cached: r.cached };
 			if (args.inline === true) {
@@ -554,7 +562,19 @@ export async function callTool(ctx: ToolContext, name: string, args: Record<stri
 			if (!urls.length) return { results: [], note: "no links in this message" };
 			const pick = args.index === undefined ? urls.slice(0, 3) : [urls[Number(args.index)]].filter((u): u is string => !!u);
 			const results = [];
-			for (const u of pick) results.push(await reader.read(u));
+			const assertCurrent = () => {
+				whitelist.assert(chatId);
+				if (!linkReadingOn(store, chatId)) throw new Error("link_reading_off");
+				const current = store.getMessage(chatId, m.id);
+				if (!current) throw new Error("message not found");
+				if (current.hidden) throw new Error("message_hidden");
+			};
+			for (const u of pick) {
+				assertCurrent();
+				const result = await reader.read(u);
+				assertCurrent();
+				results.push(result);
+			}
 			ctx.ai?.audit.log("mcp", "read_link", { chatId, detail: { n: results.length, blocked: results.filter((r) => !r.ok).map((r) => r.blocked), client } });
 			return { results: results.map((r) => (r.ok ? r : { url: r.url, final_url: r.final_url, blocked: `blocked: ${r.blocked}` })) };
 		}

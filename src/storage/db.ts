@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync } from "node:fs";
+import { mkdirSync, chmodSync, openSync, fchmodSync, closeSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema.ts";
 
@@ -59,6 +59,13 @@ export function isHiddenText(t: string | null | undefined): boolean {
 export function openDatabase(path: string): Store {
 	if (path !== ":memory:") {
 		mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+		// Set restrictive mode before SQLite creates WAL/SHM sidecars, including in an
+		// existing directory whose mode is not controlled by this application.
+		const fd = openSync(path, "a", 0o600);
+		try { fchmodSync(fd, 0o600); } finally { closeSync(fd); }
+		for (const sidecar of [`${path}-wal`, `${path}-shm`]) {
+			if (existsSync(sidecar)) chmodSync(sidecar, 0o600);
+		}
 	}
 	const db = new DatabaseSync(path);
 	db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY;");
@@ -219,20 +226,20 @@ export class Store {
 			.all(chatId, opts.before ?? Number.MAX_SAFE_INTEGER, opts.after ?? -1, limit) as unknown as MessageRow[];
 	}
 
-	/** 全文搜尋，只在 chatIds 範圍內（呼叫端負責傳入白名單）。 */
+	/** 全文搜尋，只回傳未隱藏訊息，且只在 chatIds 範圍內（呼叫端負責傳入白名單）。 */
 	searchMessages(query: string, chatIds: string[], limit = 50): MessageRow[] {
 		if (chatIds.length === 0 || query.trim() === "") return [];
 		const ph = chatIds.map(() => "?").join(",");
 		const lim = clamp(limit, 1, 200);
 		const cols = `m.chat_id, m.id, m.sender_mid, p.display_name AS sender_name, m.from_self, m.sent_at,
-		              m.content_type, m.text, m.media_name, m.media_size, m.decrypt_state`;
+		              m.content_type, m.text, m.media_name, m.media_size, m.decrypt_state, m.hidden`;
 		if ([...query].length >= 3) {
 			const fts = '"' + query.replaceAll('"', '""') + '"';
 			return this.db
 				.prepare(
 					`SELECT ${cols} FROM message_fts f JOIN message m ON m.rowid = f.rowid
 					 LEFT JOIN participant p ON p.mid = m.sender_mid
-					 WHERE message_fts MATCH ? AND m.chat_id IN (${ph})
+					 WHERE message_fts MATCH ? AND m.chat_id IN (${ph}) AND m.hidden IS NULL
 					 ORDER BY m.sent_at DESC LIMIT ?`,
 				)
 				.all(fts, ...chatIds, lim) as unknown as MessageRow[];
@@ -240,7 +247,7 @@ export class Store {
 		return this.db
 			.prepare(
 				`SELECT ${cols} FROM message m LEFT JOIN participant p ON p.mid = m.sender_mid
-				 WHERE instr(m.text, ?) > 0 AND m.chat_id IN (${ph})
+				 WHERE instr(m.text, ?) > 0 AND m.chat_id IN (${ph}) AND m.hidden IS NULL
 				 ORDER BY m.sent_at DESC LIMIT ?`,
 			)
 			.all(query, ...chatIds, lim) as unknown as MessageRow[];

@@ -8,9 +8,9 @@ import java.security.SecureRandom
 
 /**
  * 所有秘密都放在 EncryptedSharedPreferences（主金鑰在 Android Keystore，AES-256-GCM，不可匯出）。
- *  - control_token / mcp_token：本機 API 的 Bearer token
+ *  - control_token：本機控制 API HMAC key；mcp_token：MCP Bearer token
  *  - data_key：32-byte 資料金鑰；Node 用它以 AES-GCM 加密 SQLite 裡的 LINE token / E2EE 金鑰。
- *    只在啟動 Node 時經環境變數傳入（Node 讀完立即刪除），不會以明文寫到任何檔案。
+ *    只在啟動 Node 時經 stdin 傳入，不會以明文寫到任何檔案。
  *  - ai_key：使用者自己的 AI API key（選用）
  * 注意：這些呼叫會碰 Keystore，很慢，一律在背景執行緒呼叫。
  */
@@ -27,23 +27,23 @@ object Secrets {
 
     private fun random(n: Int) = ByteArray(n).also { SecureRandom().nextBytes(it) }
 
-    private fun token(ctx: Context, key: String): String {
+    @Synchronized private fun token(ctx: Context, key: String): String {
         val p = prefs(ctx)
         p.getString(key, null)?.let { return it }
         val t = random(24).joinToString("") { "%02x".format(it) }
-        p.edit().putString(key, t).commit()
+        check(p.edit().putString(key, t).commit()) { "Unable to persist local authentication key" }
         return t
     }
 
     fun controlToken(ctx: Context) = token(ctx, "control_token")
     fun mcpToken(ctx: Context) = token(ctx, "mcp_token")
-    fun setMcpToken(ctx: Context, t: String) { prefs(ctx).edit().putString("mcp_token", t).commit() }
+    @Synchronized fun setMcpToken(ctx: Context, t: String) { check(prefs(ctx).edit().putString("mcp_token", t).commit()) { "Unable to persist MCP token" } }
 
-    fun dataKeyB64(ctx: Context): String {
+    @Synchronized fun dataKeyB64(ctx: Context): String {
         val p = prefs(ctx)
         p.getString("data_key", null)?.let { return it }
         val k = Base64.encodeToString(random(32), Base64.NO_WRAP)
-        p.edit().putString("data_key", k).commit()
+        check(p.edit().putString("data_key", k).commit()) { "Unable to persist data key" }
         return k
     }
 

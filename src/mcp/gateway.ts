@@ -8,6 +8,7 @@
  * - scope line.read 只註冊只讀工具；line.send 才有送出類工具（仍受 App 內所有關卡限制）
  */
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
+import { createHash } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { buildMcpServer, TokenBucket, LOOPBACK } from "./server.ts";
@@ -58,7 +59,7 @@ export async function startGateway(ctx: ToolContext, opts: GatewayOptions): Prom
 	const sendBucket = new TokenBucket(opts.sendRatePerMin ?? 10);
 	const authBucket = new TokenBucket(30);
 	const maxBody = opts.maxBodyBytes ?? 256 * 1024;
-	const sse = new Map<string, { transport: SSEServerTransport; allowWrite: boolean; client: string; last: number }>();
+	const sse = new Map<string, { transport: SSEServerTransport; allowWrite: boolean; client: string; principal: string; last: number }>();
 	let port = opts.port ?? 47825;
 
 	const send = (res: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}) => {
@@ -99,17 +100,17 @@ export async function startGateway(ctx: ToolContext, opts: GatewayOptions): Prom
 	}
 
 	/** Bearer → { allowWrite, client }；無效回 null */
-	function authenticate(req: IncomingMessage): { allowWrite: boolean; client: string } | null {
+	function authenticate(req: IncomingMessage): { allowWrite: boolean; client: string; principal: string } | null {
 		const h = req.headers.authorization ?? "";
 		if (!h.startsWith("Bearer ")) return null;
 		const tok = h.slice(7).trim();
 		const info = oauth.verify(tok);
 		if (info) {
 			const c = oauth.client(info.client_id);
-			return { allowWrite: info.scope.includes("line.send"), client: `oauth:${c?.name ?? info.client_id}`.slice(0, 60) };
+			return { allowWrite: info.scope.includes("line.send"), client: `oauth:${c?.name ?? info.client_id}`.slice(0, 60), principal: `oauth:${info.client_id}` };
 		}
 		const g = opts.gatewayToken.verify(tok);
-		if (g) return { allowWrite: g.allowWrite, client: g.allowWrite ? "gateway-token:send" : "gateway-token:read" };
+		if (g) return { allowWrite: g.allowWrite, client: g.allowWrite ? "gateway-token:send" : "gateway-token:read", principal: `gateway:${createHash("sha256").update(tok).digest("hex")}` };
 		return null;
 	}
 
@@ -207,7 +208,7 @@ export async function startGateway(ctx: ToolContext, opts: GatewayOptions): Prom
 						sse.delete(oldest[0]);
 					}
 					const transport = new SSEServerTransport("/messages", res);
-					const entry = { transport, allowWrite: auth.allowWrite, client: auth.client, last: Date.now() };
+					const entry = { transport, allowWrite: auth.allowWrite, client: auth.client, principal: auth.principal, last: Date.now() };
 					sse.set(transport.sessionId, entry);
 					const ping = setInterval(() => res.write(": ping\n\n"), 25_000);
 					res.on("close", () => {
@@ -220,8 +221,8 @@ export async function startGateway(ctx: ToolContext, opts: GatewayOptions): Prom
 				if (path === "/messages" && req.method === "POST") {
 					const s = sse.get(url.searchParams.get("sessionId") ?? "");
 					if (!s) return void send(res, 404, { error: "unknown session" });
-					// SSE session 的權限以建立時為準，且同一個 token 身分才可以送
-					if (s.client !== auth.client || (s.allowWrite && !auth.allowWrite)) return void send(res, 403, { error: "session belongs to another client" });
+					// Bind to the verified client ID/token generation, never a user-chosen display name.
+					if (s.principal !== auth.principal || (s.allowWrite && !auth.allowWrite)) return void send(res, 403, { error: "session belongs to another client" });
 					s.last = Date.now();
 					const raw = await readRaw(req);
 					const body = JSON.parse(raw || "null");

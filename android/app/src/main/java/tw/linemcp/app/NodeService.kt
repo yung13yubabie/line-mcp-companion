@@ -44,15 +44,17 @@ class NodeService : Service() {
             try {
                 val node = File(applicationInfo.nativeLibraryDir, "libnode.so")
                 val appDir = extractNodeApp()
-                val pb = ProcessBuilder(node.absolutePath, File(appDir, "main.mjs").absolutePath)
+                // Use Node's bundled CA roots; the packaged runtime has no Termux-prefix CA store.
+                val pb = ProcessBuilder(node.absolutePath, "--use-bundled-ca", File(appDir, "main.mjs").absolutePath)
                     .directory(appDir)
                     .redirectErrorStream(true)
                 pb.environment().apply {
                     // libnode.so 若依賴 libc++_shared.so 等，放在同一個 nativeLibraryDir
                     put("LD_LIBRARY_PATH", applicationInfo.nativeLibraryDir)
                     put("LINE_MCP_HOME", filesDir.absolutePath)
-                    put("LINE_MCP_PORT", "47823")
-                    put("LINE_CONTROL_PORT", "47824")
+                    put("LINE_MCP_PORT", BuildConfig.MCP_PORT.toString())
+                    put("LINE_CONTROL_PORT", BuildConfig.CONTROL_PORT.toString())
+                    put("LINE_CONNECTOR_PORT", BuildConfig.CONNECTOR_PORT.toString())
                     // secreview SR-07：秘密改經 stdin 傳入（環境變數即使在 Node 端 delete，仍留在 /proc/<pid>/environ）
                     put("LMA_SECRETS_STDIN", "1")
                     // H-1：控制 API 只接受 HMAC 簽章請求（UI 從不送 Bearer）
@@ -70,13 +72,15 @@ class NodeService : Service() {
                     .apply { Secrets.aiKey(this@NodeService)?.let { put("ai_key", it) } }
                 val p = pb.start().also { proc = it }
                 p.outputStream.use { it.write((secrets.toString() + "\n").toByteArray(Charsets.UTF_8)) }
-                val logFile = File(filesDir, "node.log")
-                if (logFile.length() > 2_000_000) logFile.delete()
-                logFile.appendText("--- start ${System.currentTimeMillis()} ---\n")
-                p.inputStream.bufferedReader().forEachLine {
-                    // secreview SR-08：release 版不把 Node 輸出寫進 logcat（只留 App 私有的 node.log）
-                    if (BuildConfig.DEBUG) Log.i("node", it)
-                    logFile.appendText(it + "\n")
+                val log = BoundedNodeLog(File(filesDir, "node.log"))
+                log.append("--- start ${System.currentTimeMillis()} ---\n".toByteArray(Charsets.UTF_8))
+                p.inputStream.use { input ->
+                    val chunk = ByteArray(4096)
+                    while (true) {
+                        val count = input.read(chunk)
+                        if (count < 0) break
+                        if (count > 0) log.append(chunk, count)
+                    }
                 }
                 Log.w("node", "exited ${p.waitFor()}")
             } catch (e: Exception) {

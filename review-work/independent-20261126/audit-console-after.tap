@@ -1,0 +1,13 @@
+✔ generic activity audit must not persist plaintext message and prompt snapshots (8.339712ms)
+✔ legacy audit details are scrubbed and bounded operational metadata remains available (2.92465ms)
+✔ file-backed legacy minimization checkpoints current SQLite and WAL bytes (5.952357ms)
+✔ formatted object, Error, interpolation and rotated current secrets are redacted (2.2182ms)
+✔ inspection does not execute custom inspectors/getters and output is bounded (1.971717ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 359.284724
