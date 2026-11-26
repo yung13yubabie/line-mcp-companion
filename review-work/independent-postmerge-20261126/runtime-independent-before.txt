@@ -1,0 +1,15 @@
+test_real_eol_runtime_cannot_be_approved_by_flags (__main__.IndependentPolicyTests.test_real_eol_runtime_cannot_be_approved_by_flags) ... FAIL
+
+======================================================================
+FAIL: test_real_eol_runtime_cannot_be_approved_by_flags (__main__.IndependentPolicyTests.test_real_eol_runtime_cannot_be_approved_by_flags)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/40b4883b300a/line-mcp-postmerge-20261126/review-work/independent-postmerge-20261126/runtime-policy.test.py", line 17, in test_real_eol_runtime_cannot_be_approved_by_flags
+    with self.assertRaisesRegex(RuntimeError,'OPENSSL_36_EOL'):runtime.verify_policy(lock,True)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

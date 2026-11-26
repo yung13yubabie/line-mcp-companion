@@ -95,7 +95,7 @@ fun SettingsScreen(client: ControlClient) {
     fun withAuth(reason: String, f: () -> Unit) = authenticate(activity, reason, f) { msg = it }
     val t = token ?: ""
     Page("設定", null) {
-        Section("MCP 連線", "Streamable HTTP，只在這支手機的 127.0.0.1") {
+        Section("MCP 連線", "標準 stdio adapter，認證加密通道只連這支手機的 127.0.0.1") {
             ToggleRow("允許本機 MCP 寫入", info?.optBoolean("mcp_allow_write") == true, "預設只讀；啟用後仍受會話白名單與送出確認限制") { enabled ->
                 fun savePermission() { scope.launch {
                     runCatching { client.postObj("/mcp/permissions", JSONObject().put("mcp_allow_write", enabled)); client.info() }
@@ -104,15 +104,16 @@ fun SettingsScreen(client: ControlClient) {
                 } }
                 if (enabled) withAuth("允許本機 MCP 寫入", ::savePermission) else savePermission()
             }
-            Text(url, fontFamily = FontFamily.Monospace)
-            OutlinedButton(onClick = { copyPlain(ctx, " URL", url) }) { Text("複製 URL") }
-            Text("Bearer token（Keystore 加密保存）", fontSize = 12.sp, color = Color.Gray)
+            Text("先在用戶端安裝本專案與相依套件，並將設定 JSON 的 /absolute/path/to 改成腳本實際位置。舊 HTTP Bearer 設定預設停用。", fontSize = 12.sp, color = Color.Gray)
+            Text("$url/secure", fontFamily = FontFamily.Monospace)
+            OutlinedButton(onClick = { copyPlain(ctx, " URL", "$url/secure") }) { Text("複製 URL") }
+            Text("MCP 通道金鑰（Keystore 加密保存；不可給 Control API）", fontSize = 12.sp, color = Color.Gray)
             Text(if (revealed) t else "•".repeat(12) + t.takeLast(4), fontFamily = FontFamily.Monospace, fontSize = 13.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { if (revealed) revealed = false else withAuth("顯示 MCP token") { revealed = true } }) { Text(if (revealed) "遮起來" else "顯示") }
                 OutlinedButton(onClick = { withAuth("複製 MCP token") { copySensitive(ctx, " token", t) } }) { Text("複製 token") }
             }
-            OutlinedButton(onClick = { withAuth("複製 MCP 用戶端設定") { copySensitive(ctx, "設定 JSON", """{"mcpServers":{"line":{"type":"http","url":"$url","headers":{"Authorization":"Bearer $t"}}}}""") } }) { Text("複製 MCP 用戶端設定 JSON") }
+            OutlinedButton(onClick = { withAuth("複製 MCP 用戶端設定") { copySensitive(ctx, "設定 JSON", org.json.JSONObject().put("mcpServers", org.json.JSONObject().put("line", org.json.JSONObject().put("command", "node").put("args", org.json.JSONArray().put("/absolute/path/to/line-mcp-companion/scripts/mcp-stdio.ts").put("$url/secure")).put("env", org.json.JSONObject().put("LMA_MCP_CHANNEL_KEY", t)))).toString()) } }) { Text("複製 stdio 用戶端設定 JSON") }
             OutlinedButton(onClick = { withAuth("產生新的 MCP token") {
                 scope.launch {
                     runCatching { client.postObj("/mcp/rotate").getString("token") }

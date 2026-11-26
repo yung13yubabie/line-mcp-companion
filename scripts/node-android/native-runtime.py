@@ -7,6 +7,8 @@ is an explicit maintainer operation whose lockfile diff must be reviewed.
 """
 import argparse
 import concurrent.futures
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 import gzip
 import hashlib
 import json
@@ -28,6 +30,18 @@ PROVENANCE = Path(__file__).resolve().parent / "provenance"
 JNI = ROOT / "android/app/src/main/jniLibs"
 ASSETS = ROOT / "android/app/src/main/assets/native-runtime"
 ABIS = {"aarch64": ("arm64-v8a", 183), "x86_64": ("x86_64", 62)}
+# Reviewed on 2026-11-26 from the official sources recorded in
+# docs/native-runtime-support-2026-11-26.md. This is a conservative necessary
+# production condition, not a runtime compatibility or vulnerability attestation.
+SUPPORT_REVIEWED_ON = date(2026, 11, 26)
+SUPPORT_REVIEW_UNTIL = date(2026, 12, 26)
+MAX_PRODUCTION_SNAPSHOT_DAYS = 30
+NODE_24_EOL = date(2028, 4, 30)
+OPENSSL_35_EOL = date(2030, 4, 8)
+# The 2026-11-24 advisory schedules these releases for 2026-12-01.
+# A future version label must not turn an announced fix into an available build.
+OPENSSL_35_FIX_AVAILABLE_FROM = date(2026, 12, 1)
+OPENSSL_35_PATCH_FLOOR = (3, 5, 10)
 SYSTEM_LIBS = {"libc.so", "libm.so", "libdl.so", "liblog.so", "libandroid.so"}
 NAMES = {
     "libz.so.1": "libtx_z.so", "libcares.so": "libtx_cares.so",
@@ -74,6 +88,17 @@ def verify_provenance(lock, work):
     if "[GNUPG:] VALIDSIG " + lock["termux_signer_fingerprint"] + " " not in status:
         fail("APT snapshot signer does not match the pinned fingerprint")
     release = (PROVENANCE / "termux-InRelease").read_text()
+    dates = re.findall(r"^Date: (.+)$", release, re.MULTILINE)
+    if len(dates) != 1:
+        fail("Signed snapshot Date is missing or ambiguous")
+    try:
+        signed_time = parsedate_to_datetime(dates[0])
+        if signed_time.tzinfo is None:
+            raise ValueError("timezone missing")
+    except (TypeError, ValueError) as error:
+        fail("Signed snapshot Date is invalid: " + str(error))
+    if snapshot_time(lock) != signed_time.astimezone(timezone.utc):
+        fail("Lock snapshot_date does not match signed metadata")
     block = release.split("SHA256:\n", 1)[1].split("SHA512:\n")[0].split("-----BEGIN PGP SIGNATURE-----")[0]
     hashes = {fields[2]: fields[0] for line in block.splitlines() if len(fields := line.split()) == 3}
     for arch in ABIS:
@@ -179,13 +204,80 @@ def verify_maven_native_sources(lock, work):
         print("Verified Maven native source " + artifact["coordinate"])
 
 
-def verify_policy(lock, production=False):
+def snapshot_time(lock):
+    try:
+        timestamp = datetime.fromisoformat(lock["snapshot_date"].replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError("timezone missing")
+        return timestamp.astimezone(timezone.utc)
+    except (KeyError, AttributeError, TypeError, ValueError):
+        fail("Native snapshot_date must be a timezone-qualified ISO timestamp")
+
+
+def package_version(value):
+    # Only stable versions and numeric Debian repack revisions are accepted.
+    match = re.fullmatch(r"(?:[0-9]+:)?([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[0-9]+)?", str(value))
+    if not match:
+        fail("Native production version is not a stable reviewed format")
+    return tuple(int(part) for part in match.groups())
+
+
+def verify_support_window(lock, today=None):
+    """Refuse stale/EOL/unreviewed components even if approval booleans change.
+
+    This function only checks lifecycle, selected package metadata and freshness.
+    Source authenticity is separately checked by verify_provenance; output hashes
+    and the existing production approval are still independently required.
+    """
+    now = datetime.now(timezone.utc) if today is None else datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+    today = now.date()
+    versions = {}
+    packages = lock.get("packages")
+    if not isinstance(packages, list):
+        fail("Native component package manifest is missing")
+    for name in ("nodejs-lts", "openssl"):
+        selected = {}
+        selected_strings = set()
+        for entry in packages:
+            if not isinstance(entry, dict):
+                fail("Invalid native component package manifest")
+            if entry.get("Package") != name:
+                continue
+            arch = entry.get("indexArch")
+            if arch not in ABIS or arch in selected or entry.get("Architecture") != arch:
+                fail("Native component ABI selection is missing, duplicated or inconsistent: " + name)
+            selected[arch] = package_version(entry.get("Version"))
+            selected_strings.add(entry.get("Version"))
+        if set(selected) != set(ABIS) or len(selected_strings) != 1:
+            fail("Native component versions must match on both reviewed ABIs: " + name)
+        versions[name] = next(iter(selected.values()))
+    if versions["nodejs-lts"] != package_version(lock.get("node_version")):
+        fail("Node version disagrees with the selected native packages")
+    if versions["openssl"][:2] != (3, 5):
+        code = "OPENSSL_36_EOL / OPENSSL_BRANCH_UNSUPPORTED" if versions["openssl"][:2] == (3, 6) else "OPENSSL_BRANCH_UNSUPPORTED"
+        fail(code + ": selected OpenSSL branch lacks a supported compatible production policy")
+    if today >= OPENSSL_35_EOL or versions["openssl"] < OPENSSL_35_PATCH_FLOOR:
+        fail("OPENSSL_PATCH_OR_SUPPORT: supported OpenSSL 3.5 with the reviewed patch floor is required")
+    if today < OPENSSL_35_FIX_AVAILABLE_FROM:
+        fail("OPENSSL_FIX_NOT_AVAILABLE: announced December fix is not yet an available release")
+    if versions["nodejs-lts"][0] != 24 or today >= NODE_24_EOL:
+        fail("NODE_BRANCH_UNSUPPORTED: selected Node branch is outside the reviewed support window")
+    if not SUPPORT_REVIEWED_ON <= today <= SUPPORT_REVIEW_UNTIL:
+        fail("NATIVE_SUPPORT_REVIEW_STALE: refresh official lifecycle/advisory review before production")
+    age = now - snapshot_time(lock)
+    if age < timedelta(0) or age > timedelta(days=MAX_PRODUCTION_SNAPSHOT_DAYS):
+        fail("NATIVE_SNAPSHOT_STALE: production requires a recent, non-future signed snapshot")
+
+
+def verify_policy(lock, production=False, today=None):
     if lock.get("schema") != 1 or lock.get("node_version") != "24.22.3":
         fail("Unexpected native runtime policy")
     if type(lock.get("production_ready")) is not bool or not isinstance(lock.get("production_blockers"), list):
         fail("Native production approval state is missing")
     if lock["production_ready"] and lock["production_blockers"]:
         fail("Native production approval contradicts unresolved blockers")
+    if production:
+        verify_support_window(lock, today)
     if production and not lock["production_ready"]:
         blockers = "; ".join(entry["id"] + ": " + entry["reason"] for entry in lock["production_blockers"])
         fail("Production native runtime is blocked: " + (blockers or "review approval is absent"))
@@ -398,6 +490,9 @@ def main():
     args = parser.parse_args()
     lock = json.loads(LOCK_PATH.read_text())
     verify_policy(lock, args.production)
+    if args.production:
+        with tempfile.TemporaryDirectory(prefix="native-production-provenance-") as directory:
+            verify_provenance(lock, Path(directory))
     if not lock["production_ready"]:
         print("Review runtime only: production approval is blocked by " + ", ".join(entry["id"] for entry in lock["production_blockers"]))
     if args.action == "prepare":

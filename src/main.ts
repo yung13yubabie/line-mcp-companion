@@ -323,9 +323,11 @@ const control = await startControlHttp(
 			mock: MOCK,
 			mcp_url: `http://127.0.0.1:${mcpPort}/mcp`,
 			mcp_error: mcpError,
-			mcp_auth: "bearer",
+			mcp_secure_url: `http://127.0.0.1:${mcpPort}/mcp/secure`,
+            mcp_legacy_http: process.env.LMA_MCP_LEGACY_HTTP === "1",
+            mcp_auth: "mcp-psk-aead-v1",
 			data_key: dataKey.source,
-			transport: "streamable-http",
+			transport: "stdio-adapter",
 			read_receipts: store.getSetting("read_receipts") === "on" ? "enabled" : "blocked",
 			counts: store.counts(),
 		}),
@@ -340,7 +342,7 @@ const control = await startControlHttp(
 let mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
 async function startMcp(): Promise<boolean> {
 	try {
-		const mcp = await startMcpHttp(ctx, { port: mcpPort, getToken: () => mcpToken, audit });
+		const mcp = await startMcpHttp(ctx, { port: mcpPort, getToken: () => mcpToken, allowLegacyBearer: process.env.LMA_MCP_LEGACY_HTTP === "1", audit });
 		mcpStats = mcp.stats;
 		mcpUrl = mcp.url;
 		mcpError = null;

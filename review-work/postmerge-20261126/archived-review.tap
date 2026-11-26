@@ -1,0 +1,19 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> line-mcp-app@0.3.1 test:review
+> node --test review-work/independent-20261126/*.test.mjs
+
+✔ generic activity audit must not persist plaintext message and prompt snapshots (6.275888ms)
+✔ legacy audit details are scrubbed and bounded operational metadata remains available (3.033706ms)
+✔ file-backed legacy minimization checkpoints current SQLite and WAL bytes (12.135635ms)
+✔ local MCP defaults read-only, explicit control opt-in enables write, next request honors revocation (124.983578ms)
+✔ formatted object, Error, interpolation and rotated current secrets are redacted (3.950265ms)
+✔ inspection does not execute custom inspectors/getters and output is bounded (4.265102ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 990.246837

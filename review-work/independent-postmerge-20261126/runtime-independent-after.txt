@@ -1,0 +1,12 @@
+test_cross_abi_debian_revision_disagreement_is_rejected (__main__.IndependentPolicyTests.test_cross_abi_debian_revision_disagreement_is_rejected) ... ok
+test_dual_abi_node_selection_and_nonstable_openssl_fail_closed (__main__.IndependentPolicyTests.test_dual_abi_node_selection_and_nonstable_openssl_fail_closed) ... ok
+test_exact_snapshot_second_boundary_and_same_day_future_are_enforced (__main__.IndependentPolicyTests.test_exact_snapshot_second_boundary_and_same_day_future_are_enforced) ... ok
+test_real_eol_runtime_cannot_be_approved_by_flags (__main__.IndependentPolicyTests.test_real_eol_runtime_cannot_be_approved_by_flags) ... ok
+test_synthetic_supported_label_does_not_authenticate_real_signed_packages (__main__.IndependentPolicyTests.test_synthetic_supported_label_does_not_authenticate_real_signed_packages) ... ok
+test_timezone_equivalent_signed_timestamp_is_accepted_but_relabel_is_not (__main__.IndependentPolicyTests.test_timezone_equivalent_signed_timestamp_is_accepted_but_relabel_is_not) ... ok
+test_utc_date_lifecycle_boundary_and_review_expiry (__main__.IndependentPolicyTests.test_utc_date_lifecycle_boundary_and_review_expiry) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.163s
+
+OK

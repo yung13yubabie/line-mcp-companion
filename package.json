@@ -15,7 +15,7 @@
     "bundle:android:release": "bun scripts/bundle.ts --release && bash scripts/purge-mock-check.sh android/app/src/main/assets/nodeapp/main.mjs",
     "android:release": "npm run bundle:android:release && cd android && ./gradlew assembleRelease && for f in app/build/outputs/apk/release/*.apk; do bash ../scripts/purge-mock-check.sh $f; done",
     "mcp:interop": "node scripts/mcp-interop.mjs",
-    "test:review": "node --test review-work/independent-20261126/*.test.mjs"
+    "test:review": "node --test review-work/independent-20261126/*.test.mjs review-work/independent-postmerge-20261126/*.test.mjs && python3 review-work/independent-postmerge-20261126/runtime-policy.test.py"
   },
   "license": "Apache-2.0",
   "type": "module",

@@ -1,0 +1,12 @@
+✔ codec binds current key, direction, epoch, nonce, timestamp, response status and bytes (3.657901ms)
+✔ request size cap and strict loopback URL configuration fail closed (1.044152ms)
+✔ own encrypted mailbox rejects bad tag/replay/expired timestamp and new epoch invalidates old frame (62.397018ms)
+✔ standard SDK stdio entry supports read, deliberate opt-in and next-request downgrade (390.883224ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 950.616656

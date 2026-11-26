@@ -1,0 +1,15 @@
+test_flipping_approval_cannot_approve_eol_openssl (__main__.NativeRuntimeTests.test_flipping_approval_cannot_approve_eol_openssl) ... FAIL
+
+======================================================================
+FAIL: test_flipping_approval_cannot_approve_eol_openssl (__main__.NativeRuntimeTests.test_flipping_approval_cannot_approve_eol_openssl)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-20261126/test/native-runtime.test.py", line 246, in test_flipping_approval_cannot_approve_eol_openssl
+    with self.assertRaisesRegex(RuntimeError, "OPENSSL_BRANCH_UNSUPPORTED"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)

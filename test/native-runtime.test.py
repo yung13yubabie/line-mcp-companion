@@ -5,6 +5,8 @@ These tests use synthetic ELF fixtures and the committed public signed snapshot;
 they neither execute Android binaries nor contact any package server.
 """
 import contextlib
+import copy
+from datetime import date, datetime, timezone
 import importlib.util
 import io
 import json
@@ -12,6 +14,8 @@ from pathlib import Path
 import shutil
 import struct
 import tempfile
+import sys
+from unittest.mock import patch
 import unittest
 import warnings
 import zipfile
@@ -238,6 +242,117 @@ class NativeRuntimeTests(unittest.TestCase):
         del lock["production_ready"]
         with self.assertRaisesRegex(RuntimeError, "approval state is missing"):
             runtime.verify_policy(lock, production=True)
+
+    def test_flipping_approval_cannot_approve_eol_openssl(self):
+        lock = json.loads(runtime.LOCK_PATH.read_text())
+        lock["production_ready"] = True
+        lock["production_blockers"] = []
+        with self.assertRaisesRegex(RuntimeError, "OPENSSL_BRANCH_UNSUPPORTED"):
+            runtime.verify_policy(lock, production=True)
+
+    def supported_policy_fixture(self):
+        # Pure lifecycle fixture only; not a real available/signed Android package.
+        lock = json.loads(runtime.LOCK_PATH.read_text())
+        lock["production_ready"] = True
+        lock["production_blockers"] = []
+        for entry in lock["packages"]:
+            if entry["Package"] == "openssl":
+                entry["Version"] = "1:3.5.10"
+        return lock
+
+    def test_synthetic_lifecycle_candidate_is_only_a_necessary_policy_condition(self):
+        runtime.verify_policy(self.supported_policy_fixture(), production=True, today=date(2026, 12, 2))
+
+    def test_announced_fix_is_not_treated_as_available_before_release(self):
+        with self.assertRaisesRegex(RuntimeError, "OPENSSL_FIX_NOT_AVAILABLE"):
+            runtime.verify_policy(self.supported_policy_fixture(), production=True, today=date(2026, 11, 26))
+
+    def test_older_openssl_patch_is_rejected_on_supported_branch(self):
+        lock = self.supported_policy_fixture()
+        for entry in lock["packages"]:
+            if entry["Package"] == "openssl":
+                entry["Version"] = "1:3.5.9"
+        with self.assertRaisesRegex(RuntimeError, "OPENSSL_PATCH_OR_SUPPORT"):
+            runtime.verify_policy(lock, production=True, today=date(2026, 12, 2))
+
+    def test_unknown_major_and_eol_branch_cannot_inherit_approval(self):
+        for version in ("1:3.6.5", "4.1.1", "99.0.0"):
+            with self.subTest(version=version):
+                lock = self.supported_policy_fixture()
+                for entry in lock["packages"]:
+                    if entry["Package"] == "openssl": entry["Version"] = version
+                with self.assertRaisesRegex(RuntimeError, "OPENSSL_BRANCH_UNSUPPORTED"):
+                    runtime.verify_policy(lock, production=True, today=date(2026, 12, 2))
+
+    def test_lifecycle_review_expiry_rejects_stale_and_clock_rollback(self):
+        for when in (date(2026, 12, 27), date(2025, 12, 2)):
+            with self.subTest(when=when):
+                with self.assertRaises(RuntimeError):
+                    runtime.verify_policy(self.supported_policy_fixture(), production=True, today=when)
+
+    def test_snapshot_age_and_future_snapshot_are_rejected(self):
+        for timestamp in ("2026-10-01T07:12:38Z", "2026-12-03T07:12:38Z"):
+            with self.subTest(timestamp=timestamp):
+                lock = self.supported_policy_fixture(); lock["snapshot_date"] = timestamp
+                with self.assertRaisesRegex(RuntimeError, "NATIVE_SNAPSHOT_STALE"):
+                    runtime.verify_policy(lock, production=True, today=date(2026, 12, 2))
+
+    def test_snapshot_timestamp_boundaries_use_actual_utc_instants(self):
+        lock = self.supported_policy_fixture()
+        lock["snapshot_date"] = "2026-11-02T00:00:00Z"
+        runtime.verify_policy(lock, production=True, today=date(2026, 12, 2))
+        for timestamp in ("2026-11-01T23:59:59Z", "2026-12-02T00:00:01Z"):
+            with self.subTest(timestamp=timestamp):
+                lock["snapshot_date"] = timestamp
+                with self.assertRaisesRegex(RuntimeError, "NATIVE_SNAPSHOT_STALE"):
+                    runtime.verify_policy(lock, production=True, today=date(2026, 12, 2))
+
+    def test_missing_malformed_or_timezone_free_snapshot_fails_closed(self):
+        for timestamp in (None, "2026-11-25T07:12:38", "not-a-date"):
+            with self.subTest(timestamp=timestamp):
+                lock = self.supported_policy_fixture(); lock["snapshot_date"] = timestamp
+                with self.assertRaisesRegex(RuntimeError, "snapshot_date"):
+                    runtime.verify_policy(lock, production=True, today=date(2026, 12, 2))
+
+    def test_component_selection_requires_both_matching_abis(self):
+        for mutate in ("missing", "duplicate", "mismatch", "revision", "architecture"):
+            with self.subTest(mutate=mutate):
+                lock = self.supported_policy_fixture()
+                openssl = [x for x in lock["packages"] if x["Package"] == "openssl"]
+                if mutate == "missing": lock["packages"].remove(openssl[0])
+                elif mutate == "duplicate": lock["packages"].append(copy.deepcopy(openssl[0]))
+                elif mutate == "mismatch": openssl[0]["Version"] = "1:3.5.11"
+                elif mutate == "revision": openssl[0]["Version"] = "1:3.5.10-2"
+                else: openssl[0]["Architecture"] = "wrong"
+                with self.assertRaisesRegex(RuntimeError, "ABI"):
+                    runtime.verify_policy(lock, production=True, today=date(2026, 12, 2))
+
+    def test_prerelease_or_unparseable_versions_are_rejected(self):
+        for version in ("1:3.5.10~beta1", "3.5.10-rc1", "3.5", "future"):
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(RuntimeError, "stable reviewed format"):
+                    runtime.package_version(version)
+        self.assertEqual(runtime.package_version("1:3.5.10-2"), (3, 5, 10))
+
+    @unittest.skipUnless(shutil.which("gpg"), "GnuPG is required for signed snapshot tests")
+    def test_lock_cannot_relabel_signed_snapshot_date(self):
+        lock = json.loads(runtime.LOCK_PATH.read_text())
+        lock["snapshot_date"] = "2026-11-26T07:12:38Z"
+        with self.assertRaisesRegex(RuntimeError, "snapshot_date does not match signed metadata"):
+            runtime.verify_provenance(lock, self.directory)
+
+    @unittest.skipUnless(shutil.which("gpg"), "GnuPG is required for signed snapshot tests")
+    def test_production_cli_rechecks_signed_source_before_output_verification(self):
+        lock = self.supported_policy_fixture()
+        path = self.directory / "candidate.json"; path.write_text(json.dumps(lock))
+        class AfterAnnouncedRelease(datetime):
+            @classmethod
+            def now(cls, tz=None): return cls(2026, 12, 2, tzinfo=timezone.utc)
+        # Standard main() entry, fixed test clock only. The synthetic candidate
+        # passes lifecycle metadata but must fail real signed package provenance.
+        with patch.object(runtime, "LOCK_PATH", path), patch.object(runtime, "datetime", AfterAnnouncedRelease), patch.object(sys, "argv", [str(runtime.__file__), "verify", "--production"]):
+            with self.assertRaisesRegex(RuntimeError, "selection does not match signed metadata"):
+                runtime.main()
 
     @unittest.skipUnless(shutil.which("gpg"), "GnuPG is required for signed snapshot tests")
     def test_signed_package_version_cannot_be_relabelled(self):

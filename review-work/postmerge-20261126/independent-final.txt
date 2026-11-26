@@ -1,0 +1,38 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> line-mcp-app@0.3.1 test:review
+> node --test review-work/independent-20261126/*.test.mjs review-work/independent-postmerge-20261126/*.test.mjs && python3 review-work/independent-postmerge-20261126/runtime-policy.test.py
+
+✔ generic activity audit must not persist plaintext message and prompt snapshots (3.943431ms)
+✔ legacy audit details are scrubbed and bounded operational metadata remains available (2.083585ms)
+✔ file-backed legacy minimization checkpoints current SQLite and WAL bytes (7.925932ms)
+✔ local MCP defaults read-only, explicit control opt-in enables write, next request honors revocation (144.489863ms)
+✔ formatted object, Error, interpolation and rotated current secrets are redacted (2.980233ms)
+✔ inspection does not execute custom inspectors/getters and output is bounded (6.485189ms)
+✔ codec binds current key, direction, epoch, nonce, timestamp, response status and bytes (3.655806ms)
+✔ request size cap and strict loopback URL configuration fail closed (0.870758ms)
+✔ own encrypted mailbox rejects bad tag/replay/expired timestamp and new epoch invalidates old frame (70.896089ms)
+✔ standard SDK stdio entry supports read, deliberate opt-in and next-request downgrade (316.080971ms)
+✔ secure mailbox retains the independent send-tool budget (7.689132ms)
+✔ actual application main with fresh synthetic storage defaults to secure stdio and disables legacy HTTP (833.871887ms)
+✔ stdio protected-key-file entry works and refuses broad permissions or symlink (564.008687ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2348.550913
+test_cross_abi_debian_revision_disagreement_is_rejected (__main__.IndependentPolicyTests.test_cross_abi_debian_revision_disagreement_is_rejected) ... ok
+test_dual_abi_node_selection_and_nonstable_openssl_fail_closed (__main__.IndependentPolicyTests.test_dual_abi_node_selection_and_nonstable_openssl_fail_closed) ... ok
+test_exact_snapshot_second_boundary_and_same_day_future_are_enforced (__main__.IndependentPolicyTests.test_exact_snapshot_second_boundary_and_same_day_future_are_enforced) ... ok
+test_real_eol_runtime_cannot_be_approved_by_flags (__main__.IndependentPolicyTests.test_real_eol_runtime_cannot_be_approved_by_flags) ... ok
+test_synthetic_supported_label_does_not_authenticate_real_signed_packages (__main__.IndependentPolicyTests.test_synthetic_supported_label_does_not_authenticate_real_signed_packages) ... ok
+test_timezone_equivalent_signed_timestamp_is_accepted_but_relabel_is_not (__main__.IndependentPolicyTests.test_timezone_equivalent_signed_timestamp_is_accepted_but_relabel_is_not) ... ok
+test_utc_date_lifecycle_boundary_and_review_expiry (__main__.IndependentPolicyTests.test_utc_date_lifecycle_boundary_and_review_expiry) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.150s
+
+OK
