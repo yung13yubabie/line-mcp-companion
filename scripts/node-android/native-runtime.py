@@ -126,24 +126,273 @@ def verify_provenance(lock, work):
 
 
 def elf_machine(data):
-    if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01":
-        fail("Expected a 64-bit little-endian ELF file")
+    if len(data) < 64 or data[:7] != b"\x7fELF\x02\x01\x01":
+        fail("Expected a version-1 64-bit little-endian ELF file")
     offset = struct.unpack_from("<Q", data, 32)[0]
     size, count = struct.unpack_from("<HH", data, 54)
     if size < 56 or not count or count > 1024 or offset + size * count > len(data):
         fail("Invalid ELF program headers")
     load_segments = 0
+    writable = []
+    relro = []
     for index in range(count):
         start = offset + index * size
-        if struct.unpack_from("<I", data, start)[0] == 1:
+        kind, flags, file_offset, virtual_address, _, file_size, memory_size, alignment = struct.unpack_from("<IIQQQQQQ", data, start)
+        if virtual_address + memory_size > 2**64:
+            fail("ELF memory segment overflows its address space")
+        if kind == 1:
             load_segments += 1
-            file_offset, virtual_address = struct.unpack_from("<QQ", data, start + 8)
-            alignment = struct.unpack_from("<Q", data, start + 48)[0]
-            if alignment < 16384 or file_offset % 16384 != virtual_address % 16384:
+            if alignment < 16384 or alignment & (alignment - 1) or file_offset % 16384 != virtual_address % 16384:
                 fail("ELF load segment is not compatible with 16 KiB pages")
+            if file_size > memory_size or file_offset + file_size > len(data):
+                fail("ELF load segment exceeds its file or memory bounds")
+            if flags & 2:
+                writable.append((virtual_address, virtual_address + memory_size))
+        elif kind == 0x6474e552:  # PT_GNU_RELRO
+            relro.append((virtual_address, virtual_address + memory_size))
     if not load_segments:
         fail("ELF has no loadable segments")
+    # Android's rounded 16 KiB RELRO protection must not cover later writable
+    # bytes. RELRO padding can extend beyond a LOAD: inspect every writable
+    # memory range, including BSS, rather than requiring end == LOAD end.
+    for _, end in relro:
+        rounded_end = (end + 16383) // 16384 * 16384
+        if end != rounded_end and any(max(begin, end) < min(finish, rounded_end) for begin, finish in writable):
+            fail("ELF writable LOAD overlaps the rounded 16 KiB RELRO protection tail")
     return struct.unpack_from("<H", data, 18)[0]
+
+
+def elf_linkage_metadata(data):
+    """Read only ELF64 file metadata; never execute or dynamically load a file."""
+    machine = elf_machine(data)
+    if struct.unpack_from("<H", data, 16)[0] != 3:
+        fail("Native linkage requires ET_DYN shared libraries or PIE executable")
+    offset = struct.unpack_from("<Q", data, 32)[0]
+    size, count = struct.unpack_from("<HH", data, 54)
+    loads, executable, dynamics, interpreters, relro = [], [], [], [], []
+    for index in range(count):
+        segment = struct.unpack_from("<IIQQQQQQ", data, offset + index * size)
+        kind, flags, file_offset, address, _, file_size, memory_size, _ = segment
+        if kind == 1:
+            loads.append((address, file_offset, file_size))
+            if flags & 1:
+                executable.append((address, address + file_size))
+        elif kind in (2, 3):
+            if not file_size or file_offset + file_size > len(data):
+                fail("ELF dynamic/interpreter segment exceeds file bounds")
+            if kind == 2:
+                if file_size > memory_size:
+                    fail("ELF dynamic segment exceeds its memory bounds")
+                dynamics.append((file_offset, file_size, address))
+            else:
+                interpreters.append((file_offset, file_size))
+        elif kind == 0x6474e552:
+            relro.append({"start": address, "end": address + memory_size})
+    if len(dynamics) != 1 or len(interpreters) > 1:
+        fail("ELF dynamic/interpreter segment is missing or ambiguous")
+    begin, length, dynamic_address = dynamics[0]
+    if length % 16 or length // 16 > 16384:
+        fail("ELF dynamic table has invalid size")
+    entries, terminated = [], False
+    for index in range(begin, begin + length, 16):
+        tag, value = struct.unpack_from("<qQ", data, index)
+        if tag == 0:
+            terminated = True
+            break
+        entries.append((tag, value))
+    if not terminated:
+        fail("ELF dynamic table is not terminated")
+    critical = {}
+    for tag, value in entries:
+        if tag in (5, 10, 14, 15, 29, 0x6ffffffc, 0x6ffffffd, 0x6ffffffe, 0x6fffffff):
+            if tag in critical:
+                fail("ELF dynamic singleton tag is duplicated")
+            critical[tag] = value
+    if 5 not in critical or not critical.get(10):
+        fail("ELF dynamic string table is missing")
+    address, string_size = critical[5], critical[10]
+    def file_at(address, length):
+        if not length or address + length > 2**64:
+            fail("ELF metadata range is invalid")
+        mappings = {file_offset + address - start for start, file_offset, file_size in loads
+                    if start <= address and address + length <= start + file_size}
+        if len(mappings) != 1:
+            fail("ELF metadata has no unambiguous file-backed LOAD mapping")
+        return mappings.pop()
+
+    if file_at(dynamic_address, length) != begin:
+        fail("ELF dynamic segment virtual mapping disagrees with its file offset")
+    string_offset = file_at(address, string_size)
+    if string_offset + string_size > len(data):
+        fail("ELF dynamic string table exceeds file bounds")
+
+    def text(index):
+        if index >= string_size:
+            fail("ELF dynamic string offset is outside its table")
+        begin = string_offset + index
+        end = data.find(b"\0", begin, string_offset + string_size)
+        if end == -1:
+            fail("ELF dynamic string is not terminated")
+        if end - begin > 4096:
+            fail("ELF dynamic string exceeds the metadata limit")
+        try:
+            return data[begin:end].decode("ascii")
+        except UnicodeDecodeError:
+            fail("ELF linkage metadata is not ASCII")
+
+    required = [text(value) for tag, value in entries if tag == 1]
+    if len(required) != len(set(required)):
+        fail("ELF dependency list contains duplicates")
+    interpreter = None
+    if interpreters:
+        begin, length = interpreters[0]
+        raw = data[begin:begin + length]
+        if length > 4096 or raw[-1:] != b"\0" or b"\0" in raw[:-1]:
+            fail("ELF interpreter string is invalid")
+        try:
+            interpreter = raw[:-1].decode("ascii")
+        except UnicodeDecodeError:
+            fail("ELF interpreter string is not ASCII")
+    # GNU version metadata is associated with vn_file's exact provider. A
+    # definition in some other library, or a VERDEF parent auxiliary name, does
+    # not satisfy the provider. This does not resolve dynsym imports or Android
+    # platform stubs and is deliberately reported only as a necessary name check.
+    version_reads = 0
+    def version_record(address, fmt):
+        nonlocal version_reads
+        version_reads += 1
+        if version_reads > 16384:
+            fail("ELF version metadata exceeds its bounded record budget")
+        return struct.unpack_from(fmt, data, file_at(address, struct.calcsize(fmt)))
+
+    def version_chain(address, count, fmt, next_index):
+        if not 1 <= count <= 4096:
+            fail("ELF version chain count is invalid")
+        seen = set()
+        for index in range(count):
+            if address in seen:
+                fail("ELF version chain repeats a record")
+            seen.add(address)
+            values = version_record(address, fmt)
+            yield address, values
+            relative = values[next_index]
+            if index + 1 == count:
+                if relative:
+                    fail("ELF version chain count does not end at its terminator")
+            else:
+                if relative < struct.calcsize(fmt):
+                    fail("ELF version chain is truncated or overlaps records")
+                address += relative
+
+    version_needs, version_definitions = {}, []
+    need_indices, definition_indices = set(), set()
+    for address_tag, count_tag in ((0x6ffffffe, 0x6fffffff), (0x6ffffffc, 0x6ffffffd)):
+        if address_tag not in critical and count_tag not in critical:
+            continue
+        if address_tag not in critical or not critical.get(count_tag):
+            fail("ELF version table pointer/count is incomplete")
+        address, count = critical[address_tag], critical[count_tag]
+        if address_tag == 0x6ffffffe:  # Elf64_Verneed + Elf64_Vernaux
+            for current, fields in version_chain(address, count, "<HHIII", 4):
+                version, auxiliary_count, provider_offset, auxiliary_offset, _ = fields
+                if version != 1 or auxiliary_offset < 16:
+                    fail("ELF version-need header is invalid")
+                provider = text(provider_offset)
+                if not provider or provider in version_needs:
+                    fail("ELF version provider is empty or duplicated")
+                names = []
+                for _, auxiliary in version_chain(current + auxiliary_offset, auxiliary_count, "<IHHII", 4):
+                    _, _, raw_index, name_offset, _ = auxiliary
+                    index = raw_index & 0x7fff  # GNU hidden bit is not part of the index.
+                    if index < 2 or index in need_indices:
+                        fail("ELF required version index is invalid or duplicated")
+                    need_indices.add(index)
+                    name = text(name_offset)
+                    if not name or name in names:
+                        fail("ELF required version name is empty or duplicated")
+                    names.append(name)
+                version_needs[provider] = sorted(names)
+        else:  # Elf64_Verdef + Elf64_Verdaux
+            for current, fields in version_chain(address, count, "<HHHHIII", 6):
+                version, _, raw_index, auxiliary_count, _, auxiliary_offset, _ = fields
+                index = raw_index & 0x7fff
+                if version != 1 or index < 1 or index in definition_indices or auxiliary_offset < 20:
+                    fail("ELF version-definition header/index is invalid or duplicated")
+                definition_indices.add(index)
+                names = [text(auxiliary[0]) for _, auxiliary in version_chain(current + auxiliary_offset, auxiliary_count, "<II", 1)]
+                if not names[0] or names[0] in version_definitions:
+                    fail("ELF version definition is empty or duplicated")
+                version_definitions.append(names[0])  # Remaining auxiliary names are parents.
+    entry = struct.unpack_from("<Q", data, 24)[0]
+    return {"machine": machine, "needed": required,
+            "soname": text(critical[14]) if 14 in critical else None,
+            "search_paths": [{"tag": "RPATH" if tag == 15 else "RUNPATH", "value": text(critical[tag])}
+                             for tag in (15, 29) if tag in critical],
+            "interpreter": interpreter, "entry_point": entry,
+            "entry_in_executable_file_segment": bool(entry and any(begin <= entry < end for begin, end in executable)),
+            "version_needs": version_needs, "version_definitions": sorted(version_definitions), "relro": relro,
+            "relro_16k_tail_check": "passed"}
+
+
+def verify_linkage(libraries, runtime_names, abi):
+    """Verify the actual packaged graph, separately from byte-hash approval."""
+    if not {"libnode.so", "libtx_ssl.so", "libtx_crypto.so"}.issubset(runtime_names):
+        fail("Native TLS runtime libraries are missing from the runtime inventory")
+    graph = {name: elf_linkage_metadata(data) for name, data in libraries.items()}
+    node = graph["libnode.so"]
+    if not {"libtx_ssl.so", "libtx_crypto.so"}.issubset(node["needed"]):
+        fail("Node direct TLS dependencies are missing")
+    for name, item in graph.items():
+        for library in item["needed"]:
+            if not re.fullmatch(r"lib[A-Za-z0-9_+.-]+\.so", library):
+                fail("Unsafe ELF dependency name: " + name)
+            if library not in SYSTEM_LIBS and library not in graph:
+                fail("Native linkage has an unresolved dependency: " + name + " -> " + library)
+        paths = [entry["value"] for entry in item["search_paths"]]
+        if name in runtime_names and paths != ["$ORIGIN"]:
+            fail("Runtime native search path must be exactly $ORIGIN: " + name)
+        if name not in runtime_names and paths not in ([], ["$ORIGIN"]):
+            fail("Maven native search path is not local: " + name)
+        if name == "libnode.so":
+            if not item["entry_in_executable_file_segment"]:
+                fail("Node entry must be nonzero in an executable file-backed LOAD")
+            if item["interpreter"] != "/system/bin/linker64":
+                fail("Node Android interpreter must be /system/bin/linker64")
+            if item["soname"] is not None:
+                fail("Node executable must not declare a shared SONAME")
+        else:
+            if item["entry_point"] != 0:
+                fail("Shared library must not declare an executable entry: " + name)
+            if item["interpreter"] is not None:
+                fail("Shared library must not declare an interpreter: " + name)
+            if item["soname"] != name:
+                fail("Shared SONAME must equal the packaged filename: " + name)
+    for name, item in graph.items():
+        for provider, versions in item["version_needs"].items():
+            if provider not in item["needed"]:
+                fail("ELF version provider is not a direct NEEDED library: " + name + " -> " + provider)
+            if provider not in SYSTEM_LIBS:
+                absent = set(versions) - set(graph[provider]["version_definitions"])
+                if absent:
+                    fail("ELF provider version definitions are missing: " + name + " -> " + provider + ": " + ", ".join(sorted(absent)))
+    if "libtx_crypto.so" not in graph["libtx_ssl.so"]["needed"]:
+        fail("TLS crypto edge is missing from libtx_ssl.so")
+    reached, pending = set(), ["libnode.so"]
+    while pending:
+        name = pending.pop()
+        if name in reached:
+            continue
+        reached.add(name)
+        pending.extend(library for library in graph[name]["needed"] if library not in SYSTEM_LIBS)
+    if not set(runtime_names).issubset(reached):
+        fail("Runtime inventory contains libraries unreachable from Node")
+    return {"abi": abi, "validation": "static ELF linkage only; no runtime or TLS execution",
+            "node_direct_tls": True, "ssl_crypto_edge": True,
+            "exact_provider_version_names": "passed",
+            "platform_symbol_versions_and_dynsym_resolution": "not_validated_by_this_static_gate",
+            "node_reachable_runtime": sorted(set(runtime_names)),
+            "libraries": {name: {"sha256": digest(libraries[name]), "provider": "runtime" if name in runtime_names else "maven", **item}
+                          for name, item in sorted(graph.items())}}
 
 
 def needed(path):
@@ -289,6 +538,7 @@ def verify_outputs(lock, apk=None):
         fail("Native output hashes are absent or incomplete; prepare and review the runtime lock first")
     maven_outputs = maven_native_inventory(lock)
     archive = zipfile.ZipFile(apk) if apk else None
+    reports = []
     try:
         if archive:
             if len(archive.namelist()) != len(set(archive.namelist())):
@@ -306,8 +556,9 @@ def verify_outputs(lock, apk=None):
             present_abis = set(expected_abis)
             if {p.parent.name for p in JNI.glob("*/*.so")} != present_abis:
                 fail("Native ABI inventory differs from the lock")
-        for abi in present_abis:
+        for abi in sorted(present_abis):
             expected = dict(lock["outputs"][abi])
+            libraries = {}
             if "libnode.so" not in expected or not expected:
                 fail("Node runtime is missing from the output lock")
             if archive:
@@ -327,6 +578,8 @@ def verify_outputs(lock, apk=None):
                 data = archive.read(f"lib/{abi}/{name}") if archive else path.read_bytes()
                 if digest(data) != checksum or elf_machine(data) != expected_abis[abi]:
                     fail("Native hash or architecture mismatch: " + abi + "/" + name)
+                libraries[name] = data
+            reports.append(verify_linkage(libraries, set(lock["outputs"][abi]), abi))
         expected_notices = lock.get("license_outputs", {})
         if not expected_notices:
             fail("Native license manifest is missing")
@@ -345,7 +598,8 @@ def verify_outputs(lock, apk=None):
         if archive:
             archive.close()
     scope = "Node " + lock["node_version"] + (" and reviewed Maven" if apk else " local JNI")
-    print("Verified pinned " + scope + " native bytes for " + ", ".join(sorted(present_abis)))
+    print("Verified pinned " + scope + " native bytes and static linkage for " + ", ".join(sorted(present_abis)))
+    return reports
 
 
 def prepare(lock, work, record):
@@ -424,7 +678,9 @@ def prepare(lock, work, record):
                     fail("Repacked library has an unresolved dependency")
                 if run(str(patcher), "--print-rpath", str(output)).strip() != "$ORIGIN":
                     fail("Unexpected native search path")
-            hashes = {p.name: digest(p.read_bytes()) for p in sorted(target.glob("*.so"))}
+            prepared = {p.name: p.read_bytes() for p in sorted(target.glob("*.so"))}
+            verify_linkage(prepared, set(prepared), abi)
+            hashes = {name: digest(data) for name, data in prepared.items()}
             if not record and hashes != lock["outputs"].get(abi):
                 fail("Rebuilt native hashes differ from the reviewed lock: " + abi)
             outputs[abi] = hashes
@@ -477,7 +733,7 @@ def prepare(lock, work, record):
     assets = ASSETS
     assets.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(LOCK_PATH, assets / "native-runtime.lock.json")
-    verify_outputs(lock)
+    return verify_outputs(lock)
 
 
 def main():
@@ -487,22 +743,39 @@ def main():
     parser.add_argument("--record-output-hashes", action="store_true")
     parser.add_argument("--production", action="store_true", help="Require reviewed production approval; there is no bypass for unresolved blockers")
     parser.add_argument("--apk", type=Path)
+    parser.add_argument("--report", type=Path, help="Write a per-ABI static linkage receipt; never a device/TLS acceptance result")
     args = parser.parse_args()
-    lock = json.loads(LOCK_PATH.read_text())
-    verify_policy(lock, args.production)
-    if args.production:
-        with tempfile.TemporaryDirectory(prefix="native-production-provenance-") as directory:
-            verify_provenance(lock, Path(directory))
-    if not lock["production_ready"]:
-        print("Review runtime only: production approval is blocked by " + ", ".join(entry["id"] for entry in lock["production_blockers"]))
-    if args.action == "prepare":
-        prepare(lock, args.work.resolve(), args.record_output_hashes)
-    elif args.action == "verify-apk":
-        if not args.apk:
-            parser.error("verify-apk requires --apk")
-        verify_outputs(lock, args.apk)
-    else:
-        verify_outputs(lock)
+    receipt = {"schema": 1, "action": args.action, "status": "attempted",
+               "scope": "static source/hash/ELF checks; no Android execution or TLS handshake"}
+    def report():
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(receipt, indent=2) + "\n")
+    report()
+    try:
+        lock = json.loads(LOCK_PATH.read_text())
+        verify_policy(lock, args.production)
+        if args.production:
+            with tempfile.TemporaryDirectory(prefix="native-production-provenance-") as directory:
+                verify_provenance(lock, Path(directory))
+        if not lock["production_ready"]:
+            print("Review runtime only: production approval is blocked by " + ", ".join(entry["id"] for entry in lock["production_blockers"]))
+        if args.action == "prepare":
+            abis = prepare(lock, args.work.resolve(), args.record_output_hashes)
+        elif args.action == "verify-apk":
+            if not args.apk:
+                parser.error("verify-apk requires --apk")
+            abis = verify_outputs(lock, args.apk)
+        else:
+            abis = verify_outputs(lock)
+        receipt.update(status="passed", native_lock_sha256=digest(LOCK_PATH.read_bytes()),
+                       node_version=lock["node_version"], abis=abis,
+                       signed_provenance_checked_this_call=bool(args.production or args.action == "prepare"))
+        report()
+    except Exception as error:
+        receipt.update(status="failed", error_type=type(error).__name__, reason=str(error))
+        report()
+        raise
 
 
 if __name__ == "__main__":

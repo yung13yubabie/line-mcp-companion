@@ -126,3 +126,7 @@ python3 scripts/node-android/native-runtime.py verify --production
 ## 2026-11-26 接手覆核
 
 本機 MCP 現在預設只讀；需要寫入工具時，在 App 設定的 MCP 連線區明確啟用，既有會話與確認 gate 仍生效。資料最小化、診斷限額與未完成的正式發布條件見 [本輪紀錄](security-followup-2026-11-26.md)。
+
+## 原生 linkage 與16 KiB驗收
+
+最終 APK 的 TLS provider、動態相依、RELRO、ZIP 對齊與實際工具鏈 note 必須分開核對；package version／補充授權文字不代表編譯 NDK。新增 report 與原固定產物的實測邊界見 [2026-11-26封裝覆核](native-apk-packaging-review-2026-11-26.md)。真正16 KiB裝置通過還需相同APK雜湊、ABI、`PAGE_SIZE=16384` 與此App相容模式關閉的證據；本輪裝置未測。

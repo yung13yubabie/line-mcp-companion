@@ -37,6 +37,7 @@ jobs:
         run: |
           test -s "$ANDROID_HOME/platforms/android-35/android.jar"
           test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/zipalign"
           command -v gpg
           command -v dpkg-deb
           command -v readelf
@@ -47,7 +48,7 @@ jobs:
       - name: Prepare the signed, pinned native runtime
         run: |
           python3 test/native-runtime.test.py
-          python3 scripts/node-android/native-runtime.py prepare
+          python3 scripts/node-android/native-runtime.py prepare --report "$RUNNER_TEMP/native-prepare.json"
       - name: Build a review APK without mock code
         run: |
           npm run bundle:android:release
@@ -60,12 +61,14 @@ jobs:
             apk="android/app/build/outputs/apk/review/app-$abi-review.apk"
             test -s "$apk"
             bash scripts/purge-mock-check.sh "$apk"
-            python3 scripts/node-android/native-runtime.py verify-apk --apk "$apk"
+            python3 scripts/node-android/native-runtime.py verify-apk --apk "$apk" --report "review-apks/$abi-native-linkage.json"
+            "$ANDROID_HOME/build-tools/35.0.0/zipalign" -v -c -P 16 4 "$apk" > "review-apks/$abi-zipalign.txt"
             "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" > "review-apks/$abi-signature.txt"
             "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > "review-apks/$abi-package.txt"
             cp "$apk" "review-apks/line-mcp-companion-0.3.1-$abi-review.apk"
           done
           cp android/native-runtime.lock.json review-apks/
+          cp "$RUNNER_TEMP/native-prepare.json" review-apks/native-prepare.json
           cp "$RUNNER_TEMP/lma-tools/provenance.json" review-apks/build-tools.json
           git rev-parse HEAD > review-apks/source-commit.txt
           sha256sum review-apks/*.apk > review-apks/SHA256SUMS

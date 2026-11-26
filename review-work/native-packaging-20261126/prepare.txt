@@ -1,0 +1,5 @@
+Review runtime only: production approval is blocked by OPENSSL_36_EOL
+Verified Maven native source androidx.graphics:graphics-path:1.0.1
+Prepared arm64-v8a: 10 pinned ELF files
+Prepared x86_64: 10 pinned ELF files
+Verified pinned Node 24.22.3 local JNI native bytes and static linkage for arm64-v8a, x86_64

@@ -1,0 +1,36 @@
+test_dynamic_segment_requires_consistent_file_backed_virtual_mapping (__main__.NativeRuntimeTests.test_dynamic_segment_requires_consistent_file_backed_virtual_mapping) ... 
+  test_dynamic_segment_requires_consistent_file_backed_virtual_mapping (__main__.NativeRuntimeTests.test_dynamic_segment_requires_consistent_file_backed_virtual_mapping) (field=136, value=9223090561878065152) ... FAIL
+  test_dynamic_segment_requires_consistent_file_backed_virtual_mapping (__main__.NativeRuntimeTests.test_dynamic_segment_requires_consistent_file_backed_virtual_mapping) (field=136, value=1040) ... FAIL
+  test_dynamic_segment_requires_consistent_file_backed_virtual_mapping (__main__.NativeRuntimeTests.test_dynamic_segment_requires_consistent_file_backed_virtual_mapping) (field=160, value=1) ... FAIL
+
+======================================================================
+FAIL: test_dynamic_segment_requires_consistent_file_backed_virtual_mapping (__main__.NativeRuntimeTests.test_dynamic_segment_requires_consistent_file_backed_virtual_mapping) (field=136, value=9223090561878065152)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-packaging-20261126/test/native-runtime.test.py", line 419, in test_dynamic_segment_requires_consistent_file_backed_virtual_mapping
+    with self.assertRaisesRegex(RuntimeError, "ELF.*(mapping|dynamic|memory)"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_dynamic_segment_requires_consistent_file_backed_virtual_mapping (__main__.NativeRuntimeTests.test_dynamic_segment_requires_consistent_file_backed_virtual_mapping) (field=136, value=1040)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-packaging-20261126/test/native-runtime.test.py", line 419, in test_dynamic_segment_requires_consistent_file_backed_virtual_mapping
+    with self.assertRaisesRegex(RuntimeError, "ELF.*(mapping|dynamic|memory)"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_dynamic_segment_requires_consistent_file_backed_virtual_mapping (__main__.NativeRuntimeTests.test_dynamic_segment_requires_consistent_file_backed_virtual_mapping) (field=160, value=1)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-packaging-20261126/test/native-runtime.test.py", line 419, in test_dynamic_segment_requires_consistent_file_backed_virtual_mapping
+    with self.assertRaisesRegex(RuntimeError, "ELF.*(mapping|dynamic|memory)"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.009s
+
+FAILED (failures=3)

@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-packaging-20261126/scripts/node-android/native-runtime.py", line 782, in <module>
+    main()
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-packaging-20261126/scripts/node-android/native-runtime.py", line 757, in main
+    verify_policy(lock, args.production)
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-packaging-20261126/scripts/node-android/native-runtime.py", line 529, in verify_policy
+    verify_support_window(lock, today)
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-packaging-20261126/scripts/node-android/native-runtime.py", line 507, in verify_support_window
+    fail(code + ": selected OpenSSL branch lacks a supported compatible production policy")
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-packaging-20261126/scripts/node-android/native-runtime.py", line 64, in fail
+    raise RuntimeError(message)
+RuntimeError: OPENSSL_36_EOL / OPENSSL_BRANCH_UNSUPPORTED: selected OpenSSL branch lacks a supported compatible production policy
