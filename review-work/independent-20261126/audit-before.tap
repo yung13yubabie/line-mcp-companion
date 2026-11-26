@@ -1,0 +1,52 @@
+✖ generic activity audit must not persist plaintext message and prompt snapshots (99.268941ms)
+✖ legacy audit details are scrubbed and bounded operational metadata remains available (120.32107ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 539.855648
+
+✖ failing tests:
+
+test at review-work/independent-20261126/audit-content.test.mjs:6:1
+✖ generic activity audit must not persist plaintext message and prompt snapshots (99.268941ms)
+  AssertionError [ERR_ASSERTION]: message snapshot must be absent or sealed
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///workspace/scratch/40b4883b300a/line-mcp-security-20261126/review-work/independent-20261126/audit-content.test.mjs:13:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at review-work/independent-20261126/audit-content.test.mjs:21:1
+✖ legacy audit details are scrubbed and bounded operational metadata remains available (120.32107ms)
+  AssertionError [ERR_ASSERTION]: legacy freeform text must be scrubbed on initialization
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///workspace/scratch/40b4883b300a/line-mcp-security-20261126/review-work/independent-20261126/audit-content.test.mjs:29:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

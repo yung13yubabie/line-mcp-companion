@@ -122,3 +122,7 @@ python3 scripts/node-android/native-runtime.py verify --production
 `scripts/node-android/build-node-android.sh` 保留從原始碼交叉編譯的調查入口，要求明確提供官方 Node 24.22.3 tar.xz 與 NDK r27d zip。Node 使用官方 SHA-256；NDK r27d 目前使用 Android SDK repository XML 公布的 SHA-1。腳本在核對 archive 後建立新的工作目錄，使用 repo 內的 patch，將輸出標記為 **NOT APPROVED**，不自動放入 APK。這條原始碼流程本次未完成實際編譯，不能當成已通過的替代 runtime。
 
 本機回歸入口 `python3 test/native-runtime.test.py` 使用合成 ELF、合成 AAR 與已提交的公開簽章資料，檢查 30 個案例：簽章與 package 版本綁定、cache 竄改、缺少或多出 ABI/library、檔案及目錄 symlink、架構、16 KB 對齊與 offset、截斷 headers、APK provenance 與重複 entry、授權檔完整性、production approval，以及 Maven library 正例、竄改、漏檔、未知額外檔案與來源驗證。本機 Node JNI 與 Maven merge 的分工也有回歸案例。這些測試不執行 Android binary，也不連到 package server。
+
+## 2026-11-26 接手覆核
+
+本機 MCP 現在預設只讀；需要寫入工具時，在 App 設定的 MCP 連線區明確啟用，既有會話與確認 gate 仍生效。資料最小化、診斷限額與未完成的正式發布條件見 [本輪紀錄](security-followup-2026-11-26.md)。

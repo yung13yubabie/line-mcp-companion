@@ -42,6 +42,7 @@ jobs:
         run: |
           mkdir -p review-results
           npm test 2>&1 | tee review-results/tests.tap
+          npm run test:review 2>&1 | tee review-results/independent-review.tap
       - name: Audit npm dependency advisories
         run: npm audit --audit-level=high
       - name: Verify native supply chain and release gate regressions

@@ -1,7 +1,7 @@
 /**
  * 本機 MCP Server（Streamable HTTP，stateless，JSON 回應）。
  * - 預設只綁 127.0.0.1；不設 CORS（瀏覽器網頁無法呼叫）。
- * - 可選 Bearer token（Android 上建議一律開，因為同機其他 App 也能連 loopback）。
+ * - 必須 Bearer token；本機寫入權限預設關閉。
  */
 import { createServer, type Server, type IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
@@ -324,6 +324,7 @@ export async function startMcpHttp(ctx: ToolContext, opts: HttpOptions = {}): Pr
 		clients.set(client, c);
 		const mcp = buildMcpServer(ctx, {
 			client,
+			allowWrite: ctx.store.getSetting("mcp_allow_write") === "on",
 			onCall: (tool, ok, ms, code) => {
 				c.calls++;
 				stats.recent.unshift({ ts: Date.now(), client, tool, ok, ms, code });

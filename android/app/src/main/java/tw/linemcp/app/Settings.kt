@@ -96,6 +96,14 @@ fun SettingsScreen(client: ControlClient) {
     val t = token ?: ""
     Page("設定", null) {
         Section("MCP 連線", "Streamable HTTP，只在這支手機的 127.0.0.1") {
+            ToggleRow("允許本機 MCP 寫入", info?.optBoolean("mcp_allow_write") == true, "預設只讀；啟用後仍受會話白名單與送出確認限制") { enabled ->
+                fun savePermission() { scope.launch {
+                    runCatching { client.postObj("/mcp/permissions", JSONObject().put("mcp_allow_write", enabled)); client.info() }
+                        .onSuccess { info = it }
+                        .onFailure { msg = friendly(it) }
+                } }
+                if (enabled) withAuth("允許本機 MCP 寫入", ::savePermission) else savePermission()
+            }
             Text(url, fontFamily = FontFamily.Monospace)
             OutlinedButton(onClick = { copyPlain(ctx, " URL", url) }) { Text("複製 URL") }
             Text("Bearer token（Keystore 加密保存）", fontSize = 12.sp, color = Color.Gray)

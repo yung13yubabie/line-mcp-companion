@@ -72,13 +72,15 @@ class NodeService : Service() {
                     .apply { Secrets.aiKey(this@NodeService)?.let { put("ai_key", it) } }
                 val p = pb.start().also { proc = it }
                 p.outputStream.use { it.write((secrets.toString() + "\n").toByteArray(Charsets.UTF_8)) }
-                val logFile = File(filesDir, "node.log")
-                if (logFile.length() > 2_000_000) logFile.delete()
-                logFile.appendText("--- start ${System.currentTimeMillis()} ---\n")
-                p.inputStream.bufferedReader().forEachLine {
-                    // secreview SR-08：release 版不把 Node 輸出寫進 logcat（只留 App 私有的 node.log）
-                    if (BuildConfig.DEBUG) Log.i("node", it)
-                    logFile.appendText(it + "\n")
+                val log = BoundedNodeLog(File(filesDir, "node.log"))
+                log.append("--- start ${System.currentTimeMillis()} ---\n".toByteArray(Charsets.UTF_8))
+                p.inputStream.use { input ->
+                    val chunk = ByteArray(4096)
+                    while (true) {
+                        val count = input.read(chunk)
+                        if (count < 0) break
+                        if (count > 0) log.append(chunk, count)
+                    }
                 }
                 Log.w("node", "exited ${p.waitFor()}")
             } catch (e: Exception) {

@@ -269,6 +269,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 						.map((c) => ({ ...c, warn_enabled: deps.warner?.get(c.chat_id).enabled ?? false, scam_trust: ai.policy.trust(c.chat_id, "scam") }))
 				: [],
 			trust_log: ai?.policy.trustLog(20) ?? [],
+			mcp_allow_write: store.getSetting("mcp_allow_write") === "on",
 			mcp_allow_promote: store.getSetting("mcp_allow_promote") === "on",
 			mcp_allow_approve: store.getSetting("mcp_allow_approve") === "on",
 			mcp: deps.mcpStats?.() ?? null,
@@ -287,7 +288,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 			deps.startQrLogin();
 			return deps.login();
 		},
-		"GET /control/info": () => deps.info?.() ?? {},
+		"GET /control/info": () => ({ ...deps.info?.(), mcp_allow_write: store.getSetting("mcp_allow_write") === "on" }),
 		"GET /control/chats": () =>
 			store.listChats().map((c) => {
 				const last = store.getMessages(c.id, { limit: 1 })[0];
@@ -420,13 +421,13 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 		"GET /control/trust/log": (url) => need(deps.ai, "AI").policy.trustLog(Number(url.searchParams.get("limit") ?? 100), url.searchParams.get("chat_id") || undefined),
 		"POST /control/mcp/permissions": async (_u, req) => {
 			const b = await body(req);
-			for (const k of ["mcp_allow_promote", "mcp_allow_approve"] as const) {
+			for (const k of ["mcp_allow_write", "mcp_allow_promote", "mcp_allow_approve"] as const) {
 				if (b[k] !== undefined) {
 					store.setSetting(k, b[k] === true ? "on" : "off");
 					deps.ai?.audit.log("ui", `${k}_${b[k] === true ? "on" : "off"}`);
 				}
 			}
-			return { mcp_allow_promote: store.getSetting("mcp_allow_promote") === "on", mcp_allow_approve: store.getSetting("mcp_allow_approve") === "on" };
+			return { mcp_allow_write: store.getSetting("mcp_allow_write") === "on", mcp_allow_promote: store.getSetting("mcp_allow_promote") === "on", mcp_allow_approve: store.getSetting("mcp_allow_approve") === "on" };
 		},
 
 		// ---- 紀錄（加密保存；可篩選 / 匯出 CSV / 清除）----
