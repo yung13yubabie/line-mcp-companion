@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Capability first, then one normal authorized read of one fixed APK artifact.
-No AVD, device, signing, privilege change, fallback download or product test is performed by this phase.
+"""One bounded software-emulator attempt, gated by private official dependencies and fixed APK bytes.
+No KVM ACL, sudo, signing, permission increase or alternative artifact route.
 """
 import hashlib
 import json
@@ -12,6 +12,7 @@ import sys
 import urllib.error
 import urllib.request
 import zipfile
+from pr11_private_runtime_deps import prepare_private_libs
 
 REPO = "yung13yubabie/line-mcp-companion"
 ARTIFACT_ID = 15103578619
@@ -34,7 +35,9 @@ state = {
     "install": "not_attempted", "cold_start": "not_attempted",
     "background_foreground": "not_attempted", "restart": "not_attempted",
     "android_mcp_readonly": "not_attempted", "physical_device": "not_attempted",
-    "phase": "hosted_capability_and_fixed_input_only",
+    "phase": "single_bounded_software_attempt",
+    "virtualization": "software_tcg_documented_but_unsupported",
+    "private_dependencies": "not_attempted",
 }
 
 
@@ -42,10 +45,10 @@ def save():
     (OUT / "status.json").write_text(json.dumps(state, indent=2) + "\n")
 
 
-def command(args, timeout=30):
+def command(args, timeout=30, env=None):
     try:
         result = subprocess.run(args, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=timeout)
+                                stderr=subprocess.STDOUT, timeout=timeout, env=env)
         return {"command": args, "exit": result.returncode, "output": result.stdout[:16000]}
     except subprocess.TimeoutExpired:
         return {"command": args, "exit": 124, "output": "probe_timeout"}
@@ -231,7 +234,22 @@ def main():
         save()
         return 2
     sdk = Path(os.environ.get("ANDROID_HOME", "/nonexistent"))
+    initial_free = shutil.disk_usage(Path.cwd()).free
+    state["initial_disk_free_bytes"] = initial_free
+    if initial_free < 8 * 1024**3:
+        state["capability"] = "blocked_disk_budget"
+        save()
+        return 2
     emulator = official_emulator(sdk)
+    if not emulator.is_file():
+        state["capability"] = "blocked_official_emulator_setup"
+        save()
+        return 2
+    tool_env = prepare_private_libs(emulator, os.environ, OUT, state, save)
+    if tool_env is None:
+        state["capability"] = "blocked_private_dependencies"
+        save()
+        return 2
     adb = sdk / "platform-tools/adb"
     kvm = {"exists": Path("/dev/kvm").exists(),
            "readable": os.access("/dev/kvm", os.R_OK),
@@ -239,29 +257,31 @@ def main():
     free = shutil.disk_usage(Path.cwd()).free
     probes = {
         "runner": os.environ.get("RUNNER_OS"), "architecture": os.environ.get("RUNNER_ARCH"),
-        "kvm": kvm, "disk_free_bytes": free,
+        "kvm_observation_only_not_a_software_gate": kvm, "disk_free_bytes": free,
         "minimum_free_bytes": 8 * 1024**3,
-        "emulator_version": command([str(emulator), "-version"]),
-        "adb_version": command([str(adb), "version"]),
-        "accelerator": command([str(emulator), "-accel-check"]),
+        "emulator_version": command([str(emulator), "-version"], env=tool_env),
+        "adb_version": command([str(adb), "version"], env=tool_env),
         "installed_images": sorted(str(p.relative_to(sdk)) for p in (sdk / "system-images").glob("**/source.properties")),
     }
     (OUT / "capabilities.json").write_text(json.dumps(probes, indent=2) + "\n")
-    state["capability"] = "verified" if (all(kvm.values()) and free >= 8 * 1024**3
-        and probes["accelerator"]["exit"] == 0
+    state["capability"] = "software_prerequisites_verified" if (free >= 8 * 1024**3
         and probes["emulator_version"]["exit"] == 0
-        and probes["adb_version"]["exit"] == 0) else "blocked"
+        and probes["adb_version"]["exit"] == 0) else "blocked_software_prerequisites"
     save()
-    if state["capability"] != "verified":
-        print("Hosted capability gate blocked; APK download and Android stages not attempted.")
+    if state["capability"] != "software_prerequisites_verified":
+        print("Software prerequisites blocked; fixed APK and Android stages not attempted.")
         return 2
     ok = download_fixed()
     save()
     if not ok:
-        print("Fixed artifact read/identity gate blocked; no alternate permission or download route attempted.")
+        print("Fixed artifact read/identity gate blocked; software boot not attempted and no alternate route used.")
         return 3
-    print("Hosted capability and exact fixed APK bytes verified. Android execution stages not yet attempted in this phase.")
-    return 0
+    # Import only after the fixed producer bytes have actually passed their identity gates.
+    from pr11_software_emulator import run_software
+    apk = Path(os.environ["RUNNER_TEMP"]) / APK_NAME
+    ok = run_software(apk, emulator, adb, tool_env, OUT, state, save)
+    save()
+    return 0 if ok else 5
 
 
 if __name__ == "__main__":

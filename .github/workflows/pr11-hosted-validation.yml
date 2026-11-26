@@ -1,4 +1,4 @@
-name: PR11 fixed APK hosted capability
+name: PR11 fixed APK bounded software attempt
 
 on:
   pull_request:
@@ -19,13 +19,13 @@ jobs:
   capability-and-fixed-input:
     if: github.repository == 'yung13yubabie/line-mcp-companion' && github.event.pull_request.draft == true && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'validation/pr11-hosted-20261126'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       - name: Check out only this draft's validation harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Probe hosted KVM, disk and official SDK, then read the fixed existing artifact
+      - name: One bounded software attempt with private official dependencies and exact existing APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/acceptance/pr11_hosted_probe.py
