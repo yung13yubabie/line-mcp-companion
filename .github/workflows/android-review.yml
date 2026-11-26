@@ -19,6 +19,8 @@ concurrency:
 
 jobs:
   review-apk:
+    # This draft validates an existing fixed APK; do not rebuild or create another test signer.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true || github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'validation/pr11-hosted-20261126'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

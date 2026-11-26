@@ -1,0 +1,39 @@
+name: PR11 fixed APK hosted capability
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr11-hosted-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  capability-and-fixed-input:
+    if: github.repository == 'yung13yubabie/line-mcp-companion' && github.event.pull_request.draft == true && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'validation/pr11-hosted-20261126'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Check out only this draft's validation harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Probe hosted KVM, disk and official SDK, then read the fixed existing artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/acceptance/pr11_hosted_probe.py
+      - name: Retain redacted capability and stage receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: pr11-hosted-capability-${{ github.run_id }}
+          path: acceptance-results/
+          retention-days: 7
+          if-no-files-found: error
