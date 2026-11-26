@@ -130,3 +130,7 @@ python3 scripts/node-android/native-runtime.py verify --production
 ## 原生 linkage 與16 KiB驗收
 
 最終 APK 的 TLS provider、動態相依、RELRO、ZIP 對齊與實際工具鏈 note 必須分開核對；package version／補充授權文字不代表編譯 NDK。新增 report 與原固定產物的實測邊界見 [2026-11-26封裝覆核](native-apk-packaging-review-2026-11-26.md)。真正16 KiB裝置通過還需相同APK雜湊、ABI、`PAGE_SIZE=16384` 與此App相容模式關閉的證據；本輪裝置未測。
+
+## Review簽章交付
+
+Build成功與有效簽章不代表可覆蓋舊Review。每ABI的只讀receipt與實際APK比較工具、保守版本條件及未完成的設備驗收見 [Review APK交付](review-apk-handoff-2026-11-26.md)。工具不安裝、不接觸私鑰，也不解除正式NO-GO。

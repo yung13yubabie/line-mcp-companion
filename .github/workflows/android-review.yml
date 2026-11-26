@@ -65,6 +65,7 @@ jobs:
             "$ANDROID_HOME/build-tools/35.0.0/zipalign" -v -c -P 16 4 "$apk" > "review-apks/$abi-zipalign.txt"
             "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" > "review-apks/$abi-signature.txt"
             "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > "review-apks/$abi-package.txt"
+            python3 scripts/review-apk.py inspect --build-tools "$ANDROID_HOME/build-tools/35.0.0" --apk "$apk" --report "review-apks/$abi-review-receipt.json"
             cp "$apk" "review-apks/line-mcp-companion-0.3.1-$abi-review.apk"
           done
           cp android/native-runtime.lock.json review-apks/

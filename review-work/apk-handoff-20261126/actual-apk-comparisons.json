@@ -1,0 +1,57 @@
+{
+  "scope": "real signed APK host inspection/comparison; no device, installation, signing or real upgrade",
+  "inputs": [
+    {
+      "dataset": "original",
+      "abi": "arm64-v8a",
+      "sha256": "ab91cf16b7a85fd575d8da5a6d7c2526312922df787d22c1d063fc1cd4fb922e",
+      "signer": "032c8b839478924d89f03c26da668289ab1d24b348cc2d5cb0894bb197fde046",
+      "versionCode": 5,
+      "status": "signature_metadata_verified"
+    },
+    {
+      "dataset": "original",
+      "abi": "x86_64",
+      "sha256": "cd9d1c39db10d3bcb426881f182fdd2433f1d4c4df99807b9263e16da16f35a4",
+      "signer": "032c8b839478924d89f03c26da668289ab1d24b348cc2d5cb0894bb197fde046",
+      "versionCode": 5,
+      "status": "signature_metadata_verified"
+    },
+    {
+      "dataset": "head79",
+      "abi": "arm64-v8a",
+      "sha256": "e5be892d3c1949899b8483dd3d31184646f05153b03469e3989c5b770cd8dc1a",
+      "signer": "5de076edcbe627b325814a8e08ed024db98fd3fc988b6d7286fef9fbe9443113",
+      "versionCode": 5,
+      "status": "signature_metadata_verified"
+    },
+    {
+      "dataset": "head79",
+      "abi": "x86_64",
+      "sha256": "ae8e78c282763f2cc39e3508a3f5c7d1945c5e39ae493a536c752c7977e5427f",
+      "signer": "5de076edcbe627b325814a8e08ed024db98fd3fc988b6d7286fef9fbe9443113",
+      "versionCode": 5,
+      "status": "signature_metadata_verified"
+    }
+  ],
+  "comparisons": [
+    {
+      "abi": "arm64-v8a",
+      "exit": 1,
+      "blocked_reasons": [
+        "signer_mismatch",
+        "version_not_advanced"
+      ]
+    },
+    {
+      "abi": "x86_64",
+      "exit": 1,
+      "blocked_reasons": [
+        "signer_mismatch",
+        "version_not_advanced"
+      ]
+    }
+  ],
+  "real_positive_upgrade_test": "not_available; existing real APKs have different signers and equal code5",
+  "device_tests": "not_tested"
+}

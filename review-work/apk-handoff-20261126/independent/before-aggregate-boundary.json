@@ -1,0 +1,10 @@
+{
+  "scope": "Synthetic in-memory metadata/file-consistency counterexample; stub tool runner, no valid APK signing or Android execution",
+  "source_sha256_before_import": "8c820b87fb5f2fcebcce66efb542c6312234207c16df46332a0fd44cb15d71d8",
+  "source_unchanged": true,
+  "exit": 0,
+  "status": "metadata_conditions_satisfied",
+  "decision": "eligible_for_authorized_isolated_upgrade_test",
+  "reasons": [],
+  "expected": "blocked nonzero because baseline changed after its own inspection"
+}

@@ -47,6 +47,8 @@ jobs:
         run: npm audit --audit-level=high
       - name: Verify native supply chain and release gate regressions
         run: python3 test/native-runtime.test.py
+      - name: Check review APK handoff safeguards
+        run: python3 test/review-apk.test.py
       - name: Install verified Bun bundler
         run: python3 scripts/ci-tools.py "$RUNNER_TEMP/lma-tools"
       - name: Build and validate the release JavaScript bundle
