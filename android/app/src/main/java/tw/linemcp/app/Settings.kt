@@ -77,14 +77,12 @@ fun SettingsScreen(client: ControlClient) {
     val scope = rememberCoroutineScope()
     var info by remember { mutableStateOf<JSONObject?>(null) }
     var infoUnavailable by remember { mutableStateOf(false) }
-    var mock by remember { mutableStateOf(false) }
     var token by remember { mutableStateOf<String?>(null) }
     var revealed by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
     var showDisclaimer by remember { mutableStateOf(false) }
     var batteryOk by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
-        mock = withContext(Dispatchers.IO) { MockMode.enabled(ctx) }
         token = withContext(Dispatchers.IO) { Secrets.mcpToken(ctx) }
         batteryOk = (ctx.getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(ctx.packageName)
     }
@@ -144,10 +142,10 @@ fun SettingsScreen(client: ControlClient) {
         ConnectorSection(client) { reason, f -> withAuth(reason, f) }
         Section("狀態") {
             Text("已讀回條：${if (info?.optString("read_receipts") == "blocked") "封鎖中" else info?.optString("read_receipts") ?: "-"}")
-            Text("敏感欄位金鑰：${when (info?.optString("data_key")) { "keystore" -> "Android Keystore"; "ephemeral" -> "Mock（臨時金鑰）"; null, "" -> "-"; else -> info?.optString("data_key") }}")
+            Text("敏感欄位金鑰：${when (info?.optString("data_key")) { "keystore" -> "Android Keystore"; "ephemeral" -> "臨時金鑰"; null, "" -> "-"; else -> info?.optString("data_key") }}")
             Text("部分資料庫欄位加密；聊天索引、附件與部分中繼資料另存於 App 私有空間。", fontSize = 12.sp, color = Color.Gray)
             Text("會話 / 開放 / 訊息：${info?.optJSONObject("counts")?.let { "${it.optInt("chats")} / ${it.optInt("allowed")} / ${it.optInt("messages")}" } ?: "-"}")
-            Text("執行模式：${if (info?.optBoolean("mock") == true) "Mock（假資料）" else "正式"}")
+            VariantFeatures.ExecutionStatus(info)
         }
         Section("背景執行", "讓同步和反詐提醒在背景也能持續") {
             if (batteryOk) Text("已允許在背景執行 👍", fontSize = 13.sp)
@@ -164,12 +162,7 @@ fun SettingsScreen(client: ControlClient) {
             Text("版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.BUILD_TYPE}）· 與 LY Corporation 無關", fontSize = 12.sp, color = Color.Gray)
             if (BuildConfig.BUILD_TYPE == "review") Text("獨立審查版：使用測試簽章與分開的本機資料，供驗證修復使用。", fontSize = 12.sp, color = Warn)
         }
-        if (BuildConfig.DEBUG) {
-            Section("開發者（只在 debug 版）") {
-                ToggleRow("Mock 模式（假聊天資料，獨立資料庫）", mock) { v -> mock = v; scope.launch(Dispatchers.IO) { MockMode.set(ctx, v); restartNode() } }
-                OutlinedButton(onClick = { mock = false; scope.launch(Dispatchers.IO) { MockMode.purge(ctx); restartNode() } }) { Text("清除全部 Mock 資料") }
-            }
-        }
+        VariantFeatures.Settings(ctx, ::restartNode)
         Spacer(Modifier.height(16.dp))
     }
     if (showDisclaimer) AlertDialog(onDismissRequest = { showDisclaimer = false }, confirmButton = { TextButton(onClick = { showDisclaimer = false }) { Text("知道了") } },

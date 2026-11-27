@@ -336,7 +336,7 @@ export async function startControlHttp(deps: ControlDeps, opts: { port?: number;
 		// ---- AI 設定 ----
 		"GET /control/ai": () => {
 			const ai = need(deps.ai, "AI");
-			return { config: ai.config(), presets: PRESETS, driver: ai.driver, enabled: ai.policy.aiEnabled, kill_switch: ai.policy.killSwitch, daily_cap: ai.policy.dailyCap, persona: ai.persona, has_key: ai.hasKey(), key_hint: ai.keyHint(), capabilities: ai.capabilities(), styles: moduleInfo() };
+			return { config: ai.config(), presets: ai.presets(), driver: ai.driver, enabled: ai.policy.aiEnabled, kill_switch: ai.policy.killSwitch, daily_cap: ai.policy.dailyCap, persona: ai.persona, has_key: ai.hasKey(), key_hint: ai.keyHint(), capabilities: ai.capabilities(), styles: moduleInfo() };
 		},
 		"POST /control/ai": async (_u, req) => {
 			const ai = need(deps.ai, "AI");

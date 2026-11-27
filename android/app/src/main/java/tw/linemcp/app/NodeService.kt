@@ -60,7 +60,7 @@ class NodeService : Service() {
                     // H-1：控制 API 只接受 HMAC 簽章請求（UI 從不送 Bearer）
                     put("LMA_CONTROL_HMAC_ONLY", "1")
                     put("HOME", filesDir.absolutePath)
-                    if (MockMode.enabled(this@NodeService)) put("LINE_MCP_MOCK", "1")
+                    VariantFeatures.configureEnvironment(this@NodeService, this)
                     put("TMPDIR", cacheDir.absolutePath)
                     // bionic 下 Node 讀不到系統時區（實測 Etc/Unknown），由 Java 傳入
                     put("TZ", java.util.TimeZone.getDefault().id)

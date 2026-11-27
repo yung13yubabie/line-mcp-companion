@@ -29,7 +29,7 @@ python3 test/native-runtime.test.py
 python3 scripts/node-android/native-runtime.py prepare
 npm run bundle:android:release
 cd android
-./gradlew --no-daemon clean :app:assembleReview
+./gradlew --no-daemon --dependency-verification strict compileDebugKotlin testReviewUnitTest assembleReview
 ```
 
 `prepare` 下載固定版本的公開 `.deb` 與 patchelf，對照已提交的簽章資料和雜湊後，只抽取 package data，不執行 Debian maintainer scripts。預設快取在 repo 內已忽略的 `build/native-runtime`；可用 `--work /absolute/cache/path` 指定其他位置。既有 `scripts/android-libnode.sh` 與 `scripts/node-android/termux-repack.sh` 都轉交同一個驗證流程，不再接受任意資料夾的 `.so` 備案。
@@ -42,9 +42,12 @@ cd android
 實際輸出名稱與版本須以該次 Gradle `output-metadata.json` 核對。完成 build 後，回到 repo 根目錄，對兩個 APK 分別執行：
 
 ```bash
-for apk in android/app/build/outputs/apk/review/*.apk; do
+for abi in arm64-v8a x86_64; do
+  apk="android/app/build/outputs/apk/review/app-$abi-review.apk"
   python3 scripts/node-android/native-runtime.py verify-apk --apk "$apk"
-  bash scripts/purge-mock-check.sh "$apk"
+  bash scripts/purge-mock-check.sh "$apk" --build-tools "$ANDROID_HOME/build-tools/35.0.0" \
+    --expected-package tw.linemcp.app.review --expected-version-code 5 \
+    --expected-version-name 0.3.1-review --expected-abi "$abi"
   "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk"
   sha256sum "$apk"
 done
@@ -134,3 +137,12 @@ python3 scripts/node-android/native-runtime.py verify --production
 ## Review簽章交付
 
 Build成功與有效簽章不代表可覆蓋舊Review。每ABI的只讀receipt與實際APK比較工具、保守版本條件及未完成的設備驗收見 [Review APK交付](review-apk-handoff-2026-11-26.md)。工具不安裝、不接觸私鑰，也不解除正式NO-GO。
+
+
+## 2026-11-27 正式來源與 Mock 邊界
+
+Review/release 以同一 production policy 建 JS，Android QA 功能僅在 debug source-set；來源閉包、bundle bytes、完整 APK assets/DEX/manifest 與實際 package/ABI/version 必須通過新門檻。`assembleReview`／`assembleRelease` 任務完成時會逐 ABI 呼叫最終包檢查，正常 npm 入口同樣不能繞過。腳本的舊「僅傳 APK 路徑」驗證方式已拒絕；手動核對須如上明確提供官方工具及預期資料。修改版本後必須同步以實際設定核對，不能靠檔名推斷。
+
+CI 另實際編譯 debug Kotlin 以驗證 QA source-set，但不把它當 debug 裝置或 QA 互動驗收。詳細邊界及保留範圍見 [production artifact boundary](production-artifact-boundary-2026-11-27.md)，簽章／版本與真實覆蓋條件見 [upgrade preflight](apk-upgrade-preflight-2026-11-27.md)，未解 runtime／裝置條件見[狀態矩陣](runtime-device-status-2026-11-27.md)。
+
+本輪正式 APK 仍被原 native/signing gate 阻擋；Review 不是正式包，AAB 的最終打包／上架驗收也未做。沒有為了生成候選而略過 production gate。

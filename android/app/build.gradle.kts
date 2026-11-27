@@ -1,3 +1,4 @@
+import java.io.File
 import java.nio.file.Files
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -60,6 +61,10 @@ android {
             // A separate package with production behavior; never enable the mock/debug surface.
             isDebuggable = false
         }
+    }
+    sourceSets {
+        getByName("release").java.srcDir("src/production/java")
+        getByName("review").java.srcDir("src/production/java")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -141,6 +146,23 @@ val verifyProductionRuntime = tasks.register<Exec>("verifyProductionRuntime") {
     commandLine("python3", rootProject.file("../scripts/node-android/native-runtime.py"), "verify", "--production")
 }
 tasks.configureEach {
+    if (name == "assembleReview" || name == "assembleRelease") {
+        val variant = if (name == "assembleReview") "review" else "release"
+        doLast {
+            val kind = android.buildTypes.getByName(variant)
+            for (abi in listOf("arm64-v8a", "x86_64")) {
+                exec {
+                    commandLine("python3", rootProject.file("../scripts/production-artifact.py"),
+                        layout.buildDirectory.file("outputs/apk/$variant/app-$abi-$variant.apk").get().asFile,
+                        "--build-tools", File(android.sdkDirectory, "build-tools/${android.buildToolsVersion}"),
+                        "--expected-package", android.defaultConfig.applicationId + (kind.applicationIdSuffix ?: ""),
+                        "--expected-version-code", android.defaultConfig.versionCode.toString(),
+                        "--expected-version-name", android.defaultConfig.versionName + (kind.versionNameSuffix ?: ""),
+                        "--expected-abi", abi)
+                }
+            }
+        }
+    }
     if (name == "preBuild") dependsOn(verifyNativeRuntime)
     if (name == "preReleaseBuild" || name == "preReviewBuild") dependsOn(verifyProductionBundle)
     if (name == "preReleaseBuild" || name == "packageRelease" || name == "assembleRelease" || name == "bundleRelease") {
