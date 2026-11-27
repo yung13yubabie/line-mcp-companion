@@ -22,6 +22,15 @@ MARKERS = ("LMA_MOCK_DATA_v1", "LMA_MOCK_AI_v1", "u_mock_", "c_mock_", "社區�
            "mock-ai-stub", "mock-stub", "mock://local", "mock-chat", "mock-image", "Mock 示範資料", "Mock 模式（假聊天資料")
 
 
+# These exact Kotlin toolchain resources are present in both real Review ABIs.
+# They are still scanned; no arbitrary Kotlin paths or APK-wide exemptions.
+KOTLIN_METADATA_ENTRIES = frozenset({
+    "kotlin-tooling-metadata.json",
+    "kotlin/kotlin.kotlin_builtins",
+    *(f"kotlin/{name}/{name}.kotlin_builtins"
+      for name in ("annotation", "collections", "coroutines", "internal", "ranges", "reflect")),
+})
+
 class Blocked(Exception):
     pass
 
@@ -154,15 +163,23 @@ def verify_apk(path, args):
             require((item.external_attr >> 16) & 0o170000 != 0o120000, "ZIP symlink")
             require(item.file_size <= 160 * 1024 * 1024, "Oversize ZIP entry")
             scan(name.encode(), "ZIP name")
+            if name.startswith("META-INF/"):
+                require(not re.search(r"(?:^|[/_.-])(?:qa|fixtures?|tests?)(?:[/_.-]|$)",
+                                      name.removeprefix("META-INF/"), re.IGNORECASE), "QA/test metadata path: " + name)
             if item.is_dir():
                 continue
             if name.startswith("assets/"):
                 require(name in allowed_assets, "Unknown asset: " + name)
             require(name in {"AndroidManifest.xml", "resources.arsc", "DebugProbesKt.bin"} or
+                    name in KOTLIN_METADATA_ENTRIES or
                     name.startswith(("assets/", "res/", "lib/", "META-INF/")) or
                     re.fullmatch(r"classes(?:[2-9][0-9]*)?\.dex", name), "Unknown APK entry: " + name)
-            if not name.startswith(("lib/", "META-INF/")):
-                scan(archive.read(item), name)
+            payload = archive.read(item)
+            # Only actual native ELF libraries are delegated to the independent native-byte gate.
+            # Signature/dependency metadata is payload too; it must not hide App QA contents.
+            native_elf = re.fullmatch(r"lib/(?:arm64-v8a|x86_64)/[^/]+\.so", name) and payload.startswith(b"\x7fELF")
+            if not native_elf:
+                scan(payload, name)
         require("AndroidManifest.xml" in names and "resources.arsc" in names, "Incomplete APK")
         require(allowed_assets - {"assets/dexopt/baseline.prof", "assets/dexopt/baseline.profm"} <= set(names), "Missing production assets")
         require(load_json(archive.read("assets/native-runtime/native-runtime.lock.json")) == lock, "Packaged native lock differs")

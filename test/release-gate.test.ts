@@ -17,8 +17,8 @@ import { startControlHttp } from "../src/control/server.ts";
 test("production scanner synthetic structures and refusal cases", () => {
  const result = spawnSync("python3", [resolve("test/production-artifact.test.py")], { encoding: "utf8" });
  assert.equal(result.status, 0, result.stdout + result.stderr);
- assert.match(result.stderr, /Ran 10 tests/);
- assert.match(result.stdout, /Executed 10; skipped 0; failures 0; errors 0/);
+ assert.match(result.stderr, /Ran 14 tests/);
+ assert.match(result.stdout, /Executed 14; skipped 0; failures 0; errors 0/);
 });
 
 test("production gate fails closed for missing/empty/malformed/missing-receipt artifacts", () => {

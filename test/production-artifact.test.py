@@ -76,6 +76,38 @@ class BoundaryTests(unittest.TestCase):
         for additions in ({"classes2.dex": synthetic_dex(["mock_mode"])}, {"res/raw/demo.json": b"u_mock_demo"}):
             with self.subTest(additions=additions.keys()), self.assertRaises(gate.Blocked): self.inspect(self.entries | additions)
 
+    def test_meta_inf_payload_is_scanned_without_blanket_exemption(self):
+        for name, value in (("META-INF/extra.json", b"LMA_MOCK_DATA_v1"),
+                            ("META-INF/services/com.example.Provider", b"class MockSource {}")):
+            with self.subTest(name=name), self.assertRaises(gate.Blocked):
+                self.inspect(self.entries | {name: value})
+
+    def test_meta_inf_markerless_qa_fixture_and_test_paths_rejected(self):
+        for name in ("META-INF/fixture.json", "META-INF/fixtures/notes.json", "META-INF/test-data.json",
+                     "META-INF/qa/notes.json", "META-INF/Fixture.JSON"):
+            with self.subTest(name=name), self.assertRaises(gate.Blocked):
+                self.inspect(self.entries | {name: b"synthetic markerless metadata"})
+
+    def test_legitimate_signature_and_dependency_metadata_names_allowed(self):
+        # Synthetic contents test inventory/scanning only; no actual signature is asserted.
+        metadata = {"META-INF/MANIFEST.MF": b"Manifest-Version: 1.0\r\n",
+                    "META-INF/CERT.SF": b"Signature-Version: 1.0\r\n",
+                    "META-INF/CERT.RSA": b"synthetic signature bytes, not a real signature",
+                    "META-INF/kotlinx_coroutines_core.version": b"1.9.0",
+                    "META-INF/services/com.example.MockAgent": b"undici MockAgent MockPool"}
+        self.assertEqual(self.inspect(self.entries | metadata)["dex_files"], 1)
+
+    def test_known_kotlin_toolchain_entries_allowed_but_contents_scanned(self):
+        entries = self.entries | {name: b"synthetic dependency metadata" for name in gate.KOTLIN_METADATA_ENTRIES}
+        self.assertEqual(self.inspect(entries)["dex_files"], 1)
+        for name in ("kotlin-tooling-metadata.json", "kotlin/kotlin.kotlin_builtins"):
+            with self.subTest(name=name), self.assertRaisesRegex(gate.Blocked, "App QA marker"):
+                self.inspect(entries | {name: b"MockSource"})
+        for name in ("kotlin/extra.json", "kotlin/other/other.kotlin_builtins",
+                     "kotlin-tooling-metadata-copy.json"):
+            with self.subTest(name=name), self.assertRaisesRegex(gate.Blocked, "Unknown APK entry"):
+                self.inspect(entries | {name: b"synthetic unknown metadata"})
+
     def test_receipt_cannot_replace_final_bytes_scan(self):
         data = b"class MockSender {}"
         receipt = self.receipt | {"bundle_sha256": gate.sha(data)}
