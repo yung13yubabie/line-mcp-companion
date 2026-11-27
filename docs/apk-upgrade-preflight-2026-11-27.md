@@ -49,6 +49,6 @@ python3 scripts/apk-upgrade.py compare --package-kind release \
 
 只在已有授權的專用隔離 Android 環境、相同 package／ABI／合法 signer continuity 和正確版本時，以正常 UI 建立無真 LINE 的合成 canary（如可支援的設定），記錄正常安裝 baseline → 候選覆蓋（不 uninstall／clear-data）→ 冷啟動 → 讀回 canary。產品沒有正常合成資料入口就保留資料測試未做，不注入私有資料庫、不用 Mock 代替。之後分開測背景／前景、App 程序／服務重啟及整機重啟，重讀同一 canary 與本機只讀流程。
 
-本環境沒有現成可用的已授權 Android 執行通道（未找到 adb／SDK／官方 Android CLI；未登入或啟用外部服務／額度）。不重跑 #12，不上傳 APK 到別的裝置服務，不繞過。16 KiB ZIP／ELF 靜態通過不等於真機；真正原生通過另須同 APK hash/ABI、`getconf PAGE_SIZE=16384`、此 App compatibility mode 關閉證據，再跑正常流程。這些裝置／升級／資料保留均未測。
+本環境沒有現成可用的已授權 Android 執行通道（未找到可用 adb／emulator／官方 Android CLI 或已授權 device executor；既有官方 Build Tools 僅供靜態驗包，未登入或啟用外部服務／額度）。不重跑 #12，不上傳 APK 到別的裝置服務，不繞過。16 KiB ZIP／ELF 靜態通過不等於真機；真正原生通過另須同 APK hash/ABI、`getconf PAGE_SIZE=16384`、此 App compatibility mode 關閉證據，再跑正常流程。這些裝置／升級／資料保留均未測。
 
 正式 production gate 仍拒絕 OpenSSL3.6.5 EOL，Node Android 無官方支援保證；沒有通過的相容替代閉包。已預告12/1的修補版不是今天已發布且已封入的候選。不等待這些外部條件才能交本批安全工具／文件，但它們仍阻擋正式出貨。沒有公開發行或換裝使用者手機。
