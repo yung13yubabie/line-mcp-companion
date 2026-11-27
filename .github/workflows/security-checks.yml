@@ -57,6 +57,10 @@ jobs:
         run: |
           npm run bundle:android:release
           sha256sum android/app/src/main/assets/nodeapp/main.mjs > review-results/bundle.sha256
+      - name: Exercise real compiler production boundary
+        run: node --test test/production-bundle.actual.mjs 2>&1 | tee review-results/production-bundle.tap
+      - name: Exercise actual production bundle host entry
+        run: node --test test/production-entry.actual.mjs 2>&1 | tee review-results/production-entry.tap
       - name: Retain regression evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

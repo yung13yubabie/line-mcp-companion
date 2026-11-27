@@ -1,3 +1,4 @@
+import { resolveDebugDataKey } from "../src/mock/data-key.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
@@ -55,7 +56,7 @@ test("資料金鑰：沒有 LMA_DATA_KEY / LMA_PASSPHRASE 就拒絕（mock 除�
 	assert.equal(env.LMA_DATA_KEY, undefined);
 	const s2 = openDatabase(":memory:");
 	assert.throws(() => resolveDataKey(s2, { LMA_PASSPHRASE: "short" }), /at least 12/);
-	assert.equal(resolveDataKey(openDatabase(":memory:"), {}, { mock: true }).source, "ephemeral");
+	assert.equal(resolveDebugDataKey(openDatabase(":memory:"), {}).source, "ephemeral");
 });
 
 test("MCP / 控制 API：沒有 token 或 token 太短拒絕啟動；只能綁 loopback；沒帶 token 一律 401", async () => {

@@ -75,6 +75,8 @@
 3. 開啟 App → 看完風險說明 → 產生 QR → 用另一台裝置顯示並以手機 LINE 掃描 → 輸入 PIN
 4. 在「聊天」勾選要開放的聊天；在「總控台 → 設定」取得不含金鑰的 stdio 範本；另用指紋 / 螢幕鎖確認後取得 MCP 通道 key，儲存到範本指定的私有檔案
 
+正式／Review 的 QA 來源、完整 APK 封裝與剩餘門檻見[production 邊界](docs/production-artifact-boundary-2026-11-27.md)；可覆蓋更新必須另核[實際 baseline／簽章／版本](docs/apk-upgrade-preflight-2026-11-27.md)，不能由 Review 編譯成功推定。
+
 ## 開發
 
 需要 Node `24.22.3`、Bun `1.4.5`、JDK 17 以上（本輪使用 Temurin 21）、Android SDK 35／Build Tools 35.0.0。原生套件準備目前支援 Linux x86_64，另需 Python 3.12、GnuPG、`dpkg-deb` 與 `readelf`。
@@ -83,7 +85,7 @@
 npm ci --ignore-scripts --no-audit --no-fund
 npm test                       # 單元 / 端到端測試（全部假資料，不連 LINE、不呼叫 AI）
 npm run typecheck
-LMA_PASSPHRASE='至少 12 個字的密語' npm start   # 桌面執行；沒設 token 會自動產生並只印一次
+LMA_PASSPHRASE='至少 12 個字的密語' npm start  # 桌面 debug/source 入口；production 須建 release bundle
 npm run native:android         # 驗證簽署索引、下載固定套件、重包並驗證 native hashes
 npm run android:debug          # debug APK（含 Mock 模式）
 npm run android:review         # 獨立 package、測試簽章、移除 Mock 的 Review APK

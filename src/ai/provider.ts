@@ -26,6 +26,8 @@ export interface FallbackModel {
 }
 
 export interface AiConfig {
+    /** Stored provider is unsupported; safe UI view only, never usable for requests. */
+    unavailable?: boolean;
 	provider: ProviderKind;
 	base_url: string;
 	model: string;

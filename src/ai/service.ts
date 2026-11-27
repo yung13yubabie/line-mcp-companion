@@ -29,20 +29,27 @@ export interface Suggestion {
 	style: Pick<FilterResult, "method" | "changed"> & { before: number; after: number };
 }
 
+/** An application-supplied provider extension; never populated by persisted settings. */
+export interface AiProviderExtension {
+    preset: { base_url: string; model: string; image_model: string };
+    availableWithoutKey?: boolean;
+    validateEndpoint: (url: string) => void;
+    create: (cfg: AiConfig, getKey: () => string | undefined) => AiProvider;
+}
+
 export interface AiServiceOptions {
 	home: string;
 	/** 讀取 API key（只在記憶體） */
 	getKey: () => string | undefined;
 	/** 測試 / mock 用：自訂 provider 工廠 */
 	providerFactory?: (cfg: AiConfig, getKey: () => string | undefined) => AiProvider;
-	/** 是否允許 mock provider（release 為 false） */
-	allowMock?: boolean;
+	/** Trusted constructor-only extensions; production supplies none. */
+	providerExtensions?: Partial<Record<ProviderKind, AiProviderExtension>>;
 	/** 自動回覆的 debounce（ms） */
 	debounceMs?: number;
 	secrets?: () => string[];
 }
 
-const PROVIDERS: ProviderKind[] = ["openai", "xai", "anthropic", "custom", "mock"];
 
 export class AiService {
 	readonly store: Store;
@@ -63,6 +70,7 @@ export class AiService {
 		this.#opts = opts;
 		this.stickers = new StickerCatalog(store);
 		outbox.stickerSendable = (st) => this.stickers.isSendable(st);
+        this.config(); // Retire unsupported persisted state before any timers or Control reads.
 	}
 
 	/** 「由連接器代聊」（外部 AI 經 MCP 送訊息，不需要 App 內 API key）或「App 內建 AI」 */
@@ -80,11 +88,39 @@ export class AiService {
 		this.store.setSetting("ai_persona", String(p ?? "").slice(0, 300));
 	}
 
+	#extension(provider: ProviderKind): AiProviderExtension | undefined {
+        const extensions = this.#opts.providerExtensions ?? {};
+        return Object.hasOwn(extensions, provider) ? extensions[provider] : undefined;
+    }
+    #preset(provider: ProviderKind) {
+        if (Object.hasOwn(PRESETS, provider)) return PRESETS[provider as Exclude<ProviderKind, "mock">];
+        const extension = this.#extension(provider);
+        if (!extension) throw new Error("stored AI provider is unavailable in this runtime");
+        return extension.preset;
+    }
+
+    presets() {
+        return { ...PRESETS, ...Object.fromEntries(Object.entries(this.#opts.providerExtensions ?? {})
+            .map(([kind, extension]) => [kind, extension!.preset])) };
+    }
+    #retireUnsupportedProvider(): void {
+        const wasEnabled = this.policy.aiEnabled;
+        this.policy.setAiEnabled(false);
+        this.#provider = null;
+        this.store.setSetting("ai_capabilities", "");
+        const expired = Number(this.store.db.prepare("UPDATE outbox SET status='expired', scheduled_at=NULL, error='unsupported_ai_provider' WHERE status='approved'").run().changes);
+        if (wasEnabled || expired) this.audit.log("system", "unsupported_ai_provider_disabled", { detail: { expired } });
+    }
+
 	// ---- 設定 -------------------------------------------------------------
 	config(): AiConfig {
 		const g = (k: string) => this.store.getSetting(k);
-		const provider = (PROVIDERS.includes(g("ai_provider") as ProviderKind) ? g("ai_provider") : "openai") as ProviderKind;
-		const preset = provider === "mock" ? { base_url: "mock://local", model: "mock-chat", image_model: "mock-image" } : PRESETS[provider];
+		const provider = (g("ai_provider") ?? "openai") as ProviderKind;
+        if (!Object.hasOwn(PRESETS, provider) && !this.#extension(provider)) {
+            this.#retireUnsupportedProvider();
+            return { provider, unavailable: true, base_url: "", model: "", image_model: "", fallback: [], deidentify: true };
+        }
+        const preset = this.#preset(provider);
 		let fallback: FallbackModel[] = [];
 		try {
 			fallback = JSON.parse(g("ai_fallback") || "[]") as FallbackModel[];
@@ -106,10 +142,8 @@ export class AiService {
 	setConfig(patch: Partial<AiConfig>): AiConfig {
 		const cur = this.config();
 		const provider = patch.provider ?? cur.provider;
-		if (!PROVIDERS.includes(provider)) throw new Error("unknown provider");
-		if (provider === "mock" && !this.#opts.allowMock) throw new Error("mock provider is only available in debug mock mode");
+        const preset = this.#preset(provider);
 		const switching = patch.provider !== undefined && patch.provider !== cur.provider;
-		const preset = provider === "mock" ? { base_url: "mock://local", model: "mock-chat", image_model: "mock-image" } : PRESETS[provider];
 		const fb = (patch.fallback ?? cur.fallback ?? []).slice(0, 3).map((f) => ({
 			base_url: String(f.base_url ?? "").trim(),
 			model: String(f.model ?? "").trim().slice(0, 100),
@@ -130,7 +164,7 @@ export class AiService {
 			fallback: fb,
 			deidentify: patch.deidentify === undefined ? cur.deidentify !== false : patch.deidentify === true,
 		};
-		if (provider !== "mock" && next.base_url) validateBaseUrl(next.base_url);
+		if (next.base_url) (this.#extension(provider)?.validateEndpoint ?? validateBaseUrl)(next.base_url);
 		this.store.setSetting("ai_max_tokens_field", next.max_tokens_field ?? "");
 		this.store.setSetting("ai_fallback", JSON.stringify(fb));
 		this.store.setSetting("ai_deidentify", next.deidentify ? "on" : "off");
@@ -146,7 +180,7 @@ export class AiService {
 
 	hasKey(): boolean {
 		const c = this.config();
-		return c.provider === "mock" || !!this.#opts.getKey() || isLocalUrl(c.base_url) || (c.fallback ?? []).some((f) => isLocalUrl(f.base_url) && !f.use_key);
+		return !c.unavailable && (this.#extension(c.provider)?.availableWithoutKey === true || !!this.#opts.getKey() || isLocalUrl(c.base_url) || (c.fallback ?? []).some((f) => isLocalUrl(f.base_url) && !f.use_key));
 	}
 
 	/** 只回傳 key 的末 4 碼，給 UI 顯示 */
@@ -156,14 +190,16 @@ export class AiService {
 	}
 
 	provider(): AiProvider {
-		if (this.#provider) return this.#provider;
 		const cfg = this.config();
+        if (cfg.unavailable) throw new Error("stored AI provider is unavailable in this runtime");
+        if (this.#provider) return this.#provider;
 		if (!this.hasKey()) throw new Error("尚未設定 API key");
-		const f = this.#opts.providerFactory ?? ((c, k) => new OpenAICompatProvider(c, k));
+		const extension = this.#extension(cfg.provider);
+        const f = extension?.create ?? this.#opts.providerFactory ?? ((c, k) => new OpenAICompatProvider(c, k));
 		const chain = [{ name: cfg.model, p: f(cfg, this.#opts.getKey) }];
 		for (const fb of cfg.fallback ?? []) {
 			const c2: AiConfig = { provider: isLocalUrl(fb.base_url) ? "custom" : cfg.provider, base_url: fb.base_url, model: fb.model, image_model: "", max_tokens_field: fb.max_tokens_field };
-			chain.push({ name: fb.model, p: cfg.provider === "mock" ? f(c2, () => undefined) : new OpenAICompatProvider(c2, fb.use_key ? this.#opts.getKey : () => undefined) });
+			chain.push({ name: fb.model, p: extension ? extension.create(c2, () => undefined) : new OpenAICompatProvider(c2, fb.use_key ? this.#opts.getKey : () => undefined) });
 		}
 		this.#provider = chain.length === 1 ? chain[0]!.p : new FallbackChain(chain);
 		return this.#provider;
@@ -189,6 +225,7 @@ export class AiService {
 	}
 
 	capabilities(): AiCapabilities | null {
+        if (this.config().unavailable) return null;
 		const raw = this.store.getSetting("ai_capabilities");
 		if (!raw) return null;
 		try {

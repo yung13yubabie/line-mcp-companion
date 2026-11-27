@@ -5,7 +5,7 @@ import java.io.File
 
 /**
  * Mock 模式（僅 debug 建置）。資料在 filesDir/mock/，與真實 line.db 完全分開。
- * release 建置：BuildConfig.DEBUG=false → 永遠關閉；Node bundle 也已移除 mock 程式與資料。
+ * 此來源僅編入 debug source set；production/Review 不編入此類別。
  */
 object MockMode {
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)

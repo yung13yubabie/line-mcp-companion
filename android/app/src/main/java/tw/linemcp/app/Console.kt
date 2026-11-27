@@ -99,7 +99,7 @@ fun ConsoleScreen(client: ControlClient, go: (Screen) -> Unit) {
             StatusLine("LINE", when (login?.optString("phase")) { "online" -> "已連線（${login.optJSONObject("profile")?.optString("displayName")}）"; "error" -> "需要處理：${login.optString("error")}"; else -> "尚未登入" }, login?.optString("phase") == "online")
             StatusLine("同步", sync?.let { "${it.optString("state")} · ${it.optJSONObject("counts")?.optInt("messages")} 則訊息" } ?: "離線", sync?.optString("state") != "error")
             StatusLine("已讀回條", if (info?.optString("read_receipts") == "blocked") "封鎖中（不會標已讀）" else "已開啟", info?.optString("read_receipts") == "blocked")
-            if (info?.optBoolean("mock") == true) Pill("Mock 示範資料", Warn)
+            VariantFeatures.StatusBadge(info)
         }
         // ---- 代聊方式 ----
         Section("誰來代聊？", "用外部 AI（Claude、ChatGPT…經 MCP）就不需要在 App 裡放 API key") {
@@ -262,9 +262,10 @@ fun AiSettingsScreen(client: ControlClient, onBack: () -> Unit) {
         var persona by remember { mutableStateOf(c.optString("persona")) }
         var cap by remember { mutableIntStateOf(c.optInt("daily_cap", 20)) }
         Text("只有選「App 內建 AI」才需要這裡。用外部連接器代聊的話可以略過 🙂", fontSize = 13.sp, color = Color.Gray)
+        if (conf.optBoolean("unavailable")) Text("儲存的供應商已不支援，AI 已停用，已核准的舊排程已到期；待審草稿保留。請明確選擇供應商後儲存；不會自動啟用。", fontSize = 12.sp, color = Warn)
         Section("供應商", "OpenAI 相容 API：OpenAI、Grok（xAI）、Claude（Anthropic）或自訂") {
             val opts = mutableListOf("openai" to "OpenAI", "xai" to "Grok", "anthropic" to "Claude", "custom" to "自訂")
-            if (BuildConfig.DEBUG) opts += "mock" to "Mock"
+            opts += VariantFeatures.additionalProviders()
             Chips(opts, provider) { p ->
                 provider = p
                 c.optJSONObject("presets")?.optJSONObject(p)?.let { baseUrl = it.optString("base_url"); model = it.optString("model"); imageModel = it.optString("image_model") }

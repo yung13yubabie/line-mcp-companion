@@ -13,6 +13,7 @@
  *                        環境變數即使 delete 也仍留在 /proc/<pid>/environ；stdin 不會。
  */
 import { join } from "node:path";
+import { createRuntimeMode } from "./runtime-mode.ts";
 import { installSafeConsole } from "./control/safe-console.ts";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -83,9 +84,9 @@ if (process.env.LMA_SECRETS_STDIN === "1") {
 }
 
 const rootHome = process.env.LINE_MCP_HOME ?? ".state";
-// Mock 模式：只在 debug 建置可用（release bundle 以 LMA_INCLUDE_MOCK="0" 建置，整段被移除），資料放在獨立的 mock/ 目錄
-const MOCK = process.env.LMA_INCLUDE_MOCK !== "0" && process.env.LINE_MCP_MOCK === "1";
-const home = MOCK ? join(rootHome, "mock") : rootHome;
+// Build-selected runtime policy. Production implementation has no QA environment switches.
+const mode = createRuntimeMode(process.env);
+const home = mode.dataDirectory(rootHome);
 const store = openDatabase(join(home, "line.db"));
 const whitelist = new Whitelist(store);
 let dataKey: ReturnType<typeof resolveDataKey>;
@@ -93,7 +94,7 @@ try {
 	const keyEnv: NodeJS.ProcessEnv = { LMA_DATA_KEY: stdinSecrets.data_key ?? process.env.LMA_DATA_KEY, LMA_PASSPHRASE: stdinSecrets.passphrase ?? process.env.LMA_PASSPHRASE };
 	delete process.env.LMA_DATA_KEY;
 	delete process.env.LMA_PASSPHRASE;
-	dataKey = resolveDataKey(store, keyEnv, { mock: MOCK });
+	dataKey = (mode.dataKeyResolver ?? resolveDataKey)(store, keyEnv);
 } catch (e) {
 	console.error((e as Error).message);
 	process.exit(78); // EX_CONFIG
@@ -141,12 +142,11 @@ delete process.env.LINE_CONTROL_TOKEN;
 const audit = new Audit(store);
 const policy = new AiPolicy(store);
 const outbox = new Outbox(store, policy, audit, offlineSender);
-const mockAi = MOCK ? await import("./mock/mock-ai.ts") : null;
 const ai = new AiService(store, policy, outbox, audit, {
 	home,
 	getKey: () => aiKey,
-	allowMock: MOCK,
-	providerFactory: (cfg, getKey) => (cfg.provider === "mock" && mockAi ? new mockAi.MockAiProvider() : new OpenAICompatProvider(cfg, getKey)),
+	...mode.aiOptions,
+	providerFactory: (cfg, getKey) => new OpenAICompatProvider(cfg, getKey),
 	secrets: () => [mcpToken, controlToken],
 });
 const scam = new ScamDetector(store);
@@ -214,51 +214,9 @@ async function pollLoop(): Promise<void> {
 	}
 }
 
-async function goMockOnline(): Promise<void> {
-	if (process.env.LMA_INCLUDE_MOCK === "0" || !mockAi) return;
-	const { MockSource, MOCK_DEFAULT_ALLOWED, MOCK_AI_ALLOWED, seedMockDigests, MOCK_LINK_PAGES } = await import("./mock/mock-source.ts");
-	// mock：連結讀取不連網
-	links.useOffline(MOCK_LINK_PAGES);
-	const src = new MockSource();
-	state = { phase: "online", profile: { displayName: "Mock 使用者", mid: "u_mock_me" } };
-	ctx.sync = new SyncEngine(store, src);
-	ctx.media = new MediaCache(home, store, src);
-	outbox.sender = new mockAi.MockSender(store);
-	await ctx.sync.fullSync();
-	if (!store.getSetting("mock_seeded")) {
-		for (const id of MOCK_DEFAULT_ALLOWED) whitelist.set(id, true);
-		await ctx.sync.fullSync();
-		// 示範用設定：內建 AI（mock，不連網）＋兩個代聊會話＋確認佇列裡有幾則建議
-		ai.setConfig({ provider: "mock" });
-		ai.setDriver("builtin");
-		policy.setAiEnabled(true);
-		for (const id of MOCK_AI_ALLOWED) policy.set(id, { ai_allowed: true, mode: id === "c_mock_work" ? "auto" : "suggest" });
-		// 示範信任狀態：工作群 AI 回覆升到「自動」（其餘維持審核）
-		policy.setTrust("c_mock_work", "ai", "auto", "ui", "mock 示範");
-		policy.set("c_mock_family", { ai_allowed: false });
-		await ai.suggestToQueue("u_mock_mom", "auto", "suggest", null, "9004").catch((e) => console.error("mock seed:", (e as Error).message));
-		await ai.suggestToQueue("c_mock_work", "auto", "suggest", null, "9201").catch((e) => console.error("mock seed:", (e as Error).message));
-		// 反詐：重掃社區群、開啟即時提醒（@ 管委會小李）
-		scam.setAdmin("c_mock_hood", "u_mock_n1", { name: "管委會小李", mention: true });
-		scam.rescanChat("c_mock_hood");
-		warner.set("c_mock_hood", { enabled: true, mention_admins: true });
-		// 日報示範（只在 mock）
-		try {
-			seedMockDigests(store, digests);
-			store.setSetting("link_read:c_mock_work", "on");
-			store.setSetting("link_read:c_mock_hood", "on");
-			poster.saveSchedule({ target_chat: "c_mock_work", source_chats: ["c_mock_work", "c_mock_hood"], time_hhmm: "21:00", generate: true }, "system");
-		} catch (e) {
-			console.error("mock digests:", (e as Error).message);
-		}
-		store.setSetting("mock_seeded", "1");
-	} else src.live = []; // 已示範過即時提醒
-	attachSync(ctx.sync);
-	void pollLoop();
-}
 
 function startQrLogin(): void {
-	if (MOCK) return;
+	if (mode.isolated) return;
 	if (state.phase === "waiting_qr_scan" || state.phase === "waiting_pin" || state.phase === "online") return;
 	state = { phase: "waiting_qr_scan" };
 	session
@@ -272,7 +230,7 @@ function startQrLogin(): void {
 
 /** 貼圖圖片：mock 用程式產生；真實模式從 LINE 貼圖 CDN 取一次後快取（只接受數字 id，大小上限 512KB） */
 async function stickerImage(id: string): Promise<{ bytes: Uint8Array; mime: string }> {
-	if (MOCK && mockAi) return { bytes: mockAi.mockStickerPng(id), mime: "image/png" };
+	if (mode.stickerImage) return mode.stickerImage(id);
 	const dir = join(home, "stickers");
 	const file = join(dir, `${id}.png`);
 	if (existsSync(file)) return { bytes: readFileSync(file), mime: "image/png" };
@@ -323,7 +281,7 @@ const control = await startControlHttp(
 		connector: { oauth, gatewayPort: connectorPort, tunnel, gatewayToken },
 		syncStatus: () => (ctx.sync ? (ctx.sync.status() as unknown as Record<string, unknown>) : null),
 		info: () => ({
-			mock: MOCK,
+			mock: mode.isolated,
 			mcp_url: mcpUrl, // Historical compatibility field; not the primary connection setting.
 			mcp_status: mcpStatus,
 			mcp_error: mcpError,
@@ -369,7 +327,7 @@ if (process.env.LMA_CONNECTOR === "1") {
 	console.error(JSON.stringify({ event: "connector", gateway: gateway.url, note: "retrieve pairing code through authenticated /control/connector" }));
 	if (process.env.LMA_TUNNEL === "cloudflare") void tunnel.start(connectorPort).then((st) => console.error(JSON.stringify({ event: "tunnel_status", ...st })));
 }
-console.log(JSON.stringify({ event: "ready", control: control.url, mcp: mcpUrl, mcp_error: mcpError, connector: gateway.url, mock: MOCK }));
+console.log(JSON.stringify({ event: "ready", control: control.url, mcp: mcpUrl, mcp_error: mcpError, connector: gateway.url, mock: mode.isolated }));
 
 // 排程送出 / 過期清理
 setInterval(() => {
@@ -387,10 +345,11 @@ for (const sig of ["SIGTERM", "SIGINT"] as const)
 	});
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", (e as Error)?.message ?? e));
 
-if (MOCK) await goMockOnline();
+if (mode.initialize) await mode.initialize({ store, home, whitelist, ctx, outbox, ai, policy, scam, warner,
+    digests, links, poster, attachSync, pollLoop, setLoginState: value => { state = value; } });
 
 // 已有 token → 直接上線；清除資料後沒有 token → 等 UI 觸發 QR 登入，登入後自動完整同步
-if (!MOCK && session.savedToken()) {
+if (!mode.isolated && session.savedToken()) {
 	session
 		.loginWithToken()
 		.then(goOnline)

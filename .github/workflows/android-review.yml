@@ -53,7 +53,7 @@ jobs:
         run: |
           npm run bundle:android:release
           cd android
-          ./gradlew --no-daemon --dependency-verification strict testReviewUnitTest assembleReview
+          ./gradlew --no-daemon --dependency-verification strict --info --stacktrace compileDebugKotlin testReviewUnitTest assembleReview
       - name: Verify APK contents and signatures
         run: |
           mkdir -p review-apks
@@ -71,7 +71,9 @@ jobs:
           for abi in arm64-v8a x86_64; do
             apk="android/app/build/outputs/apk/review/app-$abi-review.apk"
             test -s "$apk"
-            bash scripts/purge-mock-check.sh "$apk"
+            bash scripts/purge-mock-check.sh "$apk" --build-tools "$ANDROID_HOME/build-tools/35.0.0" \
+              --expected-package tw.linemcp.app.review --expected-version-code 5 --expected-version-name 0.3.1-review \
+              --expected-abi "$abi" --report "review-apks/$abi-production-boundary.json"
             python3 scripts/node-android/native-runtime.py verify-apk --apk "$apk" --report "review-apks/$abi-native-linkage.json"
             "$ANDROID_HOME/build-tools/35.0.0/zipalign" -v -c -P 16 4 "$apk" > "review-apks/$abi-zipalign.txt"
             "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" > "review-apks/$abi-signature.txt"

@@ -8,6 +8,7 @@ node_modules
 /android/**/build/
 /android/local.properties
 android/app/src/main/assets/nodeapp/main.mjs
+android/app/src/main/assets/nodeapp/build-boundary.json
 android/app/src/main/assets/native-runtime/
 android/app/src/main/jniLibs/**/*.so
 # build outputs / artifacts
