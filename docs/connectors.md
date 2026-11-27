@@ -7,6 +7,8 @@ App 有兩個 MCP 入口，都**只綁手機的 127.0.0.1**：
 | 本機 MCP | 標準 stdio adapter → `http://127.0.0.1:47823/mcp/secure` | MCP 專用 key、每次 challenge／啟動 epoch、分向 AEAD | 同一支手機上的 stdio 用戶端；手機／Termux 相容性仍待裝置驗收 |
 | 雲端連接器閘道（預設關） | `http://127.0.0.1:47825` → 經 HTTPS 通道變成 `https://<你的網址>/mcp`、`/sse` | OAuth 2.1（DCR + PKCE + 配對碼），或預設關閉的獨立 gateway token | ChatGPT、Claude、Grok、Gemini 的「自訂連接器」，以及可帶 header 的 CLI / API |
 
+本機舊 `/mcp` 設定須遷移到 stdio；總控台 → 設定會顯示服務與舊入口的實際狀態，就緒後才能複製不含 key 的檔案式設定範本。`/mcp/secure` 是專用認證封裝，不是可直接貼給 HTTP MCP 用戶端的網址。見[遷移步驟與驗收限制](mcp-connection-migration-2026-11-27.md)。本頁 `/connector` 回應的 `mcp_url` 與 `oauth-smoke.ts` 屬於獨立雲端 gateway，並非本機 `info.mcp_url`，不可混用 key 或替換路徑。
+
 雲端 AI 是從**它們自己的伺服器**連過來，連不到你手機的 127.0.0.1，所以一定要有公開的 HTTPS 網址（通道）。
 
 ## 舊入口驗證紀錄（2026-11-25，box 上跑 mock 假資料）

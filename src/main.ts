@@ -3,7 +3,7 @@
  * 環境變數：
  *   LINE_MCP_HOME        資料目錄（Android：context.filesDir），內含 line.db 與 media/
  *   LINE_MCP_PORT        MCP 埠（預設 47823）
- *   LINE_MCP_TOKEN       MCP Bearer token（沒設 → 自動產生並寫入 0600 檔案；執行中可由 UI 輪換）
+ *   LINE_MCP_TOKEN       MCP 專用通道 key（沒設 → 自動產生並寫入 0600 檔案；執行中可由 UI 輪換）
  *   LINE_CONTROL_PORT    控制 API 埠（預設 47824）
  *   LINE_CONTROL_TOKEN   控制 API token（沒設 → 自動產生並寫入 0600 檔案）
  *   LMA_DATA_KEY         Android：Keystore 解開的資料金鑰（base64 32 bytes），用來加密 SQLite 裡的 LINE token / E2EE 金鑰
@@ -286,6 +286,9 @@ async function stickerImage(id: string): Promise<{ bytes: Uint8Array; mime: stri
 }
 
 const mcpPort = Number(process.env.LINE_MCP_PORT ?? 47823);
+const mcpLegacyHttp = process.env.LMA_MCP_LEGACY_HTTP === "1";
+let mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+let mcpStatus: "starting" | "ready" | "unavailable" = "starting";
 // 雲端連接器閘道（預設關；App 設定或 LMA_CONNECTOR=1 開啟）
 const oauth = new OAuthServer(store, audit);
 const tunnel = new QuickTunnel();
@@ -321,11 +324,13 @@ const control = await startControlHttp(
 		syncStatus: () => (ctx.sync ? (ctx.sync.status() as unknown as Record<string, unknown>) : null),
 		info: () => ({
 			mock: MOCK,
-			mcp_url: `http://127.0.0.1:${mcpPort}/mcp`,
+			mcp_url: mcpUrl, // Historical compatibility field; not the primary connection setting.
+			mcp_status: mcpStatus,
 			mcp_error: mcpError,
-			mcp_secure_url: `http://127.0.0.1:${mcpPort}/mcp/secure`,
-            mcp_legacy_http: process.env.LMA_MCP_LEGACY_HTTP === "1",
-            mcp_auth: "mcp-psk-aead-v1",
+			mcp_secure_url: mcpStatus === "ready" ? `${mcpUrl}/secure` : null,
+			mcp_legacy_http: mcpLegacyHttp, // Configured opt-in, retained for old consumers.
+			mcp_legacy_http_enabled: mcpStatus === "ready" && mcpLegacyHttp,
+			mcp_auth: "mcp-psk-aead-v1",
 			data_key: dataKey.source,
 			transport: "stdio-adapter",
 			read_receipts: store.getSetting("read_receipts") === "on" ? "enabled" : "blocked",
@@ -339,15 +344,16 @@ const control = await startControlHttp(
 	process.exit(75);
 });
 // secreview SR-02：MCP 埠被其他程式佔用時不崩潰，記錄並讓 UI 顯示警告，之後每 30 秒重試
-let mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
 async function startMcp(): Promise<boolean> {
 	try {
-		const mcp = await startMcpHttp(ctx, { port: mcpPort, getToken: () => mcpToken, allowLegacyBearer: process.env.LMA_MCP_LEGACY_HTTP === "1", audit });
+		const mcp = await startMcpHttp(ctx, { port: mcpPort, getToken: () => mcpToken, allowLegacyBearer: mcpLegacyHttp, audit });
 		mcpStats = mcp.stats;
 		mcpUrl = mcp.url;
+		mcpStatus = "ready";
 		mcpError = null;
 		return true;
 	} catch (e) {
+		mcpStatus = "unavailable";
 		mcpError = (e as NodeJS.ErrnoException).code === "EADDRINUSE" ? "port_in_use" : "start_failed";
 		audit.log("system", "mcp_start_failed", { ok: false, detail: { reason: mcpError } });
 		console.error(JSON.stringify({ event: "mcp_start_failed", reason: mcpError, port: mcpPort }));

@@ -76,6 +76,7 @@ fun SettingsScreen(client: ControlClient) {
     val activity = ctx as FragmentActivity
     val scope = rememberCoroutineScope()
     var info by remember { mutableStateOf<JSONObject?>(null) }
+    var infoUnavailable by remember { mutableStateOf(false) }
     var mock by remember { mutableStateOf(false) }
     var token by remember { mutableStateOf<String?>(null) }
     var revealed by remember { mutableStateOf(false) }
@@ -87,16 +88,27 @@ fun SettingsScreen(client: ControlClient) {
         token = withContext(Dispatchers.IO) { Secrets.mcpToken(ctx) }
         batteryOk = (ctx.getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(ctx.packageName)
     }
-    LaunchedEffect(Unit) { var last = ""; while (true) { val i = runCatching { client.info() }.getOrNull(); val s = i?.toString() ?: ""; if (s != last) { last = s; info = i }; delay(4000) } }
+    LaunchedEffect(Unit) {
+        var last = ""
+        while (true) {
+            runCatching { client.info() }.onSuccess { i ->
+                val value = i.toString()
+                if (value != last || info == null) { last = value; info = i }
+                infoUnavailable = false
+            }.onFailure { infoUnavailable = true }
+            delay(4000)
+        }
+    }
     // 顯示 30 秒後自動遮起來
     LaunchedEffect(revealed) { if (revealed) { delay(30_000); revealed = false } }
-    val url = info?.optString("mcp_url") ?: "http://127.0.0.1:${BuildConfig.MCP_PORT}/mcp"
+    val localMcp = info.localMcpPresentation(infoUnavailable)
     fun restartNode() = ctx.startService(Intent(ctx, NodeService::class.java).setAction(NodeService.ACTION_RESTART))
     fun withAuth(reason: String, f: () -> Unit) = authenticate(activity, reason, f) { msg = it }
     val t = token ?: ""
     Page("設定", null) {
         Section("MCP 連線", "標準 stdio adapter，認證加密通道只連這支手機的 127.0.0.1") {
-            ToggleRow("允許本機 MCP 寫入", info?.optBoolean("mcp_allow_write") == true, "預設只讀；啟用後仍受會話白名單與送出確認限制") { enabled ->
+            LocalMcpStatusSummary(localMcp)
+            ToggleRow("允許本機 MCP 寫入", localMcp.writeAllowed, "預設只讀；啟用後仍受會話白名單與送出確認限制", enabled = localMcp.canChangeWritePermission) { enabled ->
                 fun savePermission() { scope.launch {
                     runCatching { client.postObj("/mcp/permissions", JSONObject().put("mcp_allow_write", enabled)); client.info() }
                         .onSuccess { info = it }
@@ -104,28 +116,33 @@ fun SettingsScreen(client: ControlClient) {
                 } }
                 if (enabled) withAuth("允許本機 MCP 寫入", ::savePermission) else savePermission()
             }
-            Text("先在用戶端安裝本專案與相依套件，並將設定 JSON 的 /absolute/path/to 改成腳本實際位置。舊 HTTP Bearer 設定預設停用。", fontSize = 12.sp, color = Color.Gray)
-            Text("$url/secure", fontFamily = FontFamily.Monospace)
-            OutlinedButton(onClick = { copyPlain(ctx, " URL", "$url/secure") }) { Text("複製 URL") }
-            Text("MCP 通道金鑰（Keystore 加密保存；不可給 Control API）", fontSize = 12.sp, color = Color.Gray)
-            Text(if (revealed) t else "•".repeat(12) + t.takeLast(4), fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { if (revealed) revealed = false else withAuth("顯示 MCP token") { revealed = true } }) { Text(if (revealed) "遮起來" else "顯示") }
-                OutlinedButton(onClick = { withAuth("複製 MCP token") { copySensitive(ctx, " token", t) } }) { Text("複製 token") }
+            Text("先在執行 adapter 的同一裝置安裝本專案與相依套件。將範本內的腳本與金鑰檔路徑換成實際絕對路徑；金鑰檔由你建立，僅擁有者可讀（0600）。", fontSize = 12.sp, color = Color.Gray)
+            localMcp.secureEndpoint?.let { endpoint ->
+                Text("受保護端點（僅供 adapter，不是一般 HTTP MCP 網址）", fontSize = 12.sp, color = Color.Gray)
+                Text(endpoint, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
             }
-            OutlinedButton(onClick = { withAuth("複製 MCP 用戶端設定") { copySensitive(ctx, "設定 JSON", org.json.JSONObject().put("mcpServers", org.json.JSONObject().put("line", org.json.JSONObject().put("command", "node").put("args", org.json.JSONArray().put("/absolute/path/to/line-mcp-companion/scripts/mcp-stdio.ts").put("$url/secure")).put("env", org.json.JSONObject().put("LMA_MCP_CHANNEL_KEY", t)))).toString()) } }) { Text("複製 stdio 用戶端設定 JSON") }
-            OutlinedButton(onClick = { withAuth("產生新的 MCP token") {
+            Text("stdio 範本不含金鑰；LMA_MCP_CHANNEL_KEY_FILE 指向上述受保護檔案。", fontSize = 12.sp, color = Color.Gray)
+            localMcp.adapterTemplate?.let { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
+            OutlinedButton(enabled = localMcp.adapterTemplate != null, onClick = {
+                localMcp.adapterTemplate?.let { copyPlain(ctx, " stdio 設定範本", it) }
+            }) { Text("複製 stdio 設定範本（不含金鑰）") }
+            Text("MCP 通道金鑰（Keystore 加密保存；不可給 Control API）", fontSize = 12.sp, color = Color.Gray)
+            Text(if (t.isEmpty()) "尚未載入" else if (revealed) t else "•".repeat(12) + t.takeLast(4), fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = t.isNotEmpty(), onClick = { if (revealed) revealed = false else withAuth("顯示 MCP 通道金鑰") { revealed = true } }) { Text(if (revealed) "遮起來" else "顯示金鑰") }
+                OutlinedButton(enabled = t.isNotEmpty(), onClick = { withAuth("複製 MCP 通道金鑰") { copySensitive(ctx, "通道金鑰", t) } }) { Text("複製金鑰") }
+            }
+            OutlinedButton(onClick = { withAuth("產生新的 MCP 通道金鑰") {
                 scope.launch {
                     runCatching { client.postObj("/mcp/rotate").getString("token") }
-                        .onSuccess { nt -> withContext(Dispatchers.IO) { Secrets.setMcpToken(ctx, nt) }; token = nt; revealed = false; msg = "換好了，記得更新 AI 用戶端的設定；舊 token 已失效" }
+                        .onSuccess { nt -> withContext(Dispatchers.IO) { Secrets.setMcpToken(ctx, nt) }; token = nt; revealed = false; msg = "換好了，請更新 adapter 的受保護金鑰檔；舊金鑰已失效" }
                         .onFailure { msg = friendly(it) }
                 }
-            } }) { Text("🔄 換一組新 token") }
+            } }) { Text("🔄 換一組新金鑰") }
             msg?.let { Text(it, color = Warn, fontSize = 13.sp) }
         }
         ConnectorSection(client) { reason, f -> withAuth(reason, f) }
         Section("狀態") {
-            if (info?.optString("mcp_error") == "port_in_use") Text("⚠️ MCP 連接埠 ${BuildConfig.MCP_PORT} 被其他 App 佔用：AI 用戶端可能連到冒牌服務，請先移除可疑 App 再重新啟動", color = Warn, fontSize = 13.sp)
             Text("已讀回條：${if (info?.optString("read_receipts") == "blocked") "封鎖中" else info?.optString("read_receipts") ?: "-"}")
             Text("敏感欄位金鑰：${when (info?.optString("data_key")) { "keystore" -> "Android Keystore"; "ephemeral" -> "Mock（臨時金鑰）"; null, "" -> "-"; else -> info?.optString("data_key") }}")
             Text("部分資料庫欄位加密；聊天索引、附件與部分中繼資料另存於 App 私有空間。", fontSize = 12.sp, color = Color.Gray)

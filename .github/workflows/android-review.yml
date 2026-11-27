@@ -53,10 +53,21 @@ jobs:
         run: |
           npm run bundle:android:release
           cd android
-          ./gradlew --no-daemon --dependency-verification strict assembleReview
+          ./gradlew --no-daemon --dependency-verification strict testReviewUnitTest assembleReview
       - name: Verify APK contents and signatures
         run: |
           mkdir -p review-apks
+          python3 - <<'PYTEST'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          reports = list(Path("android/app/build/test-results/testReviewUnitTest").glob("TEST-*.xml"))
+          assert reports, "No JVM test reports; NO-SOURCE is not acceptance"
+          totals = {key: sum(int(ET.parse(p).getroot().get(key, "0")) for p in reports) for key in ("tests", "failures", "errors", "skipped")}
+          assert totals["tests"] > 0 and all(totals[k] == 0 for k in ("failures", "errors", "skipped")), totals
+          assert any(ET.parse(p).getroot().get("name") == "tw.linemcp.app.LocalMcpPresentationTest" and int(ET.parse(p).getroot().get("tests", "0")) > 0 for p in reports), "Missing or empty connection UI model suite"
+          print("Actual local JVM results:", totals, "(not device/UI acceptance)")
+          PYTEST
+          cp android/app/build/test-results/testReviewUnitTest/TEST-*.xml review-apks/
           for abi in arm64-v8a x86_64; do
             apk="android/app/build/outputs/apk/review/app-$abi-review.apk"
             test -s "$apk"

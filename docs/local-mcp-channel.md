@@ -18,9 +18,11 @@
 }
 ```
 
-Review 使用 47833，正式配置為 47823；以該安裝的 App 顯示位址為準。腳本路徑需改成用戶端的實際路徑。App 複製的 JSON 使用相容的 `LMA_MCP_CHANNEL_KEY` 環境設定並含 key，仍需修改腳本路徑；該 JSON／剪貼簿是敏感設定，不要貼到公開對話。環境變數模式在啟動時刪除 JS process.env 的 key，但不宣稱能抹除 OS 啟動環境歷史；優先使用受保護檔案。檔案 mode／owner／symlink 檢查屬 Unix；Windows 檔案 ACL 需由使用者另行保護。
+Review 使用 47833，正式配置為 47823；以該安裝的 App 顯示位址為準。腳本路徑需改成用戶端的實際路徑。總控台的「MCP 連線」會導向設定；服務確認就緒時，設定提供不含金鑰的 `LMA_MCP_CHANNEL_KEY_FILE` 範本。必須修改腳本及私有金鑰檔的絕對路徑，並另經裝置驗證顯示／複製 MCP 通道 key 放入該檔；不要給它 Control key。舊 `LMA_MCP_CHANNEL_KEY` 環境模式仍供既有 adapter 設定相容，但不再由 UI 產生；它不能抹除 OS 啟動環境歷史，應遷移到受保護檔案。檔案 mode／owner／symlink 檢查屬 Unix；Windows 檔案 ACL 需由使用者另行保護。
 
 stdio 的 stdin/stdout 是標準 MCP JSON-RPC；應用端 `/mcp/secure` 是專用封裝，不能把一般 HTTP MCP 用戶端直接指向它。未測所有第三方用戶端與 Termux／Android 裝置，不將本機標準 SDK 測試當成這些平台已通過。
+
+既有 HTTP 設定、未知／未就緒狀態及 Review 簽章限制，見[本輪遷移與驗收](mcp-connection-migration-2026-11-27.md)。
 
 ## 身分與資料保護
 
@@ -33,10 +35,19 @@ stdio 的 stdin/stdout 是標準 MCP JSON-RPC；應用端 `/mcp/secure` 是專�
 
 ## 舊入口與剩餘限制
 
-App 的 `src/main.ts` 預設停用原 `/mcp` HTTP Bearer。只有明確設定 `LMA_MCP_LEGACY_HTTP=1` 的開發相容環境才保留；它有原來的伺服器身分風險，不是 adapter 的降級路徑。`startMcpHttp` 低階 API 為既有合成開發 fixtures 保留 legacy 預設相容；正式應用 main 明確傳 false，其他呼叫者應同樣明確禁用。Review UI 不再複製舊 Bearer 設定。
+App 的 `src/main.ts` 預設停用原 `/mcp` HTTP Bearer。只有明確設定 `LMA_MCP_LEGACY_HTTP=1` 的開發相容環境才保留；它有原來的伺服器身分風險，不是 adapter 的降級路徑。`startMcpHttp` 低階 API 為既有合成開發 fixtures 保留 legacy 預設相容；正式應用 main 明確傳 false，其他呼叫者應同樣明確禁用。`serve:fake` 已明確禁用並預設綁隨機埠。Review UI 不再複製舊 Bearer 設定。
 
 這是共享 PSK 的受保護通道：持有同一 MCP key 的已授權用戶端處在同一信任範圍，不能藉它區分各 client 或作硬體裝置證明。純 HTTP MCP／雲端 tunnel 的內側、不同應用的匯出設定、每 client scoped credential、真機／背景／重啟驗收仍需後續設計與驗證。不能因此宣稱所有 G01 路徑已解除；native runtime、正式簽章與裝置門檻也仍為 NO-GO。
 
 ## 實際驗證範圍
 
 `test/mcp-channel.test.ts` 使用合成 key、in-memory SQLite、fake sync、自有 loopback HTTP 和真正 SDK StdioClientTransport，驗 codec context、標準入口初始化／工具呼叫、預設只讀／啟用／降權與 legacy-disabled。沒有占埠、擷取秘密、漏洞利用、真 LINE 登入或雲端模型呼叫。獨立 reviewer 另設驗證，結果與固定提交放在本輪報告；編譯與單元測試不等於裝置驗收。
+
+
+## 只查狀態的 host smoke
+
+```sh
+node scripts/mcp-interop.mjs --url http://127.0.0.1:47833/mcp/secure --key-file /absolute/path/to/private-mcp-key
+```
+
+此 helper 真正經標準 SDK 啟動 stdio adapter，只列工具名稱數量並呼叫 `get_sync_status`；不讀訊息、不傳送、不輸出 key。舊 `<url> <token>` positional 語法已拒絕，沒有 HTTP Bearer fallback。`npm run serve:fake` 另建全合成 host fixture，輸出實際 secure URL 和自有臨時 key-file 路徑（不輸出 key）；Ctrl-C／SIGTERM 清除它自己的臨時目錄。它不是 Android、真機或真 LINE 驗收。

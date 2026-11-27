@@ -30,6 +30,20 @@ import org.json.JSONObject
 
 fun JSONArray.objs(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 
+/** JSONObject adapter keeps runtime field types; missing/null values remain unknown. */
+internal fun JSONObject?.localMcpPresentation(requestFailed: Boolean = false): LocalMcpPresentation =
+    presentLocalMcp(this?.let { json ->
+        json.keys().asSequence().associateWith { key -> json.opt(key).takeUnless { it === JSONObject.NULL } }
+    }, requestFailed)
+
+@Composable
+internal fun LocalMcpStatusSummary(model: LocalMcpPresentation) {
+    StatusLine("本機 MCP", model.statusText, model.ready)
+    Text(model.detailText, fontSize = 12.sp, color = if (model.ready) Color.Gray else Warn)
+    Text(model.legacyText, fontSize = 12.sp,
+        color = if (model.legacyState == LocalMcpLegacyState.ENABLED) Warn else Color.Gray)
+}
+
 val MODE_LABEL = mapOf("off" to "關閉", "suggest" to "僅建議", "auto" to "代聊")
 
 @Composable
@@ -51,7 +65,21 @@ fun ConsoleScreen(client: ControlClient, go: (Screen) -> Unit) {
     LaunchedEffect(tick) { var last = ""; while (true) { runCatching { client.getObj("/dashboard") }.onSuccess { val s = it.toString(); if (s != last || d == null) { last = s; d = it }; if (err != null) err = null }.onFailure { err = friendly(it) }; delay(4000) } }
     fun post(path: String, body: JSONObject) = scope.launch { runCatching { client.post(path, body) }.onFailure { err = friendly(it) }; tick++ }
     Page("總控台", null) {
-        val dash = d ?: run { Loading(); return@Page }
+        // Readiness must stay visible even when dashboard or MCP statistics are absent.
+        Section("MCP 連線", "到設定使用本專案的標準 stdio adapter 範本") {
+            LocalMcpStatusSummary(d?.optJSONObject("info").localMcpPresentation(err != null))
+            OutlinedButton(onClick = { go(Screen.Settings) }) { Text("前往設定取得 stdio 範本") }
+            d?.optJSONObject("mcp")?.let { m ->
+                val rej = m.optJSONObject("rejected")
+                Text("請求 ${m.optInt("requests")} 次 · 擋下：未授權 ${rej?.optInt("unauthorized")}、太頻繁 ${rej?.optInt("rate_limited")}、太大 ${rej?.optInt("too_large")}、來源不符 ${rej?.optInt("forbidden")}", fontSize = 12.sp, color = Color.Gray)
+                m.optJSONArray("clients")?.objs()?.forEach { c -> Text("🔌 ${c.optString("name")} · ${c.optInt("calls")} 次 · ${fmtDateTime(c.optLong("last_seen"))}", fontSize = 13.sp) }
+                m.optJSONArray("recent")?.objs()?.take(6)?.forEach { r ->
+                    Text("${fmtTime(r.optLong("ts"))} ${r.optString("tool")} ${if (r.optBoolean("ok")) "✓" else "✗ ${r.optString("code")}"}", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = if (r.optBoolean("ok")) Color.DarkGray else Danger)
+                }
+                if (m.optJSONArray("recent")?.length() == 0) Text("還沒有 AI 用戶端呼叫過", fontSize = 12.sp, color = Color.Gray)
+            } ?: Text("尚無 MCP 呼叫統計；不代表服務已就緒。", fontSize = 12.sp, color = Color.Gray)
+        }
+        val dash = d ?: run { err?.let { Text(it, color = Danger, fontSize = 12.sp) }; Loading(); return@Page }
         err?.let { Text(it, color = Danger, fontSize = 12.sp) }
         val ai = dash.optJSONObject("ai")
         val kill = ai?.optBoolean("kill_switch") == true
@@ -135,19 +163,6 @@ fun ConsoleScreen(client: ControlClient, go: (Screen) -> Unit) {
                     OutlinedButton(onClick = { go(Screen.Scam) }) { Text("看全部警示") }
                     OutlinedButton(onClick = { go(Screen.Logs) }) { Text("紀錄") }
                 }
-            }
-        }
-        // ---- MCP ----
-        dash.optJSONObject("mcp")?.let { m ->
-            Section("MCP 連線") {
-                Text(dash.optJSONObject("info")?.optString("mcp_url") ?: "", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-                val rej = m.optJSONObject("rejected")
-                Text("請求 ${m.optInt("requests")} 次 · 擋下：未授權 ${rej?.optInt("unauthorized")}、太頻繁 ${rej?.optInt("rate_limited")}、太大 ${rej?.optInt("too_large")}、來源不符 ${rej?.optInt("forbidden")}", fontSize = 12.sp, color = Color.Gray)
-                m.optJSONArray("clients")?.objs()?.forEach { c -> Text("🔌 ${c.optString("name")} · ${c.optInt("calls")} 次 · ${fmtDateTime(c.optLong("last_seen"))}", fontSize = 13.sp) }
-                m.optJSONArray("recent")?.objs()?.take(6)?.forEach { r ->
-                    Text("${fmtTime(r.optLong("ts"))} ${r.optString("tool")} ${if (r.optBoolean("ok")) "✓" else "✗ ${r.optString("code")}"}", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = if (r.optBoolean("ok")) Color.DarkGray else Danger)
-                }
-                if (m.optJSONArray("recent")?.length() == 0) Text("還沒有 AI 用戶端呼叫過", fontSize = 12.sp, color = Color.Gray)
             }
         }
         // ---- 稽核紀錄 ----
