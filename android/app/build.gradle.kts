@@ -159,7 +159,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.zxing:core:3.5.3")        // 把 LINE QR URL 畫成 QR 圖
-    implementation("androidx.security:security-crypto:1.1.0-alpha06") // token / 資料金鑰加密保存
+    implementation("androidx.security:security-crypto:1.1.0") // token / 資料金鑰加密保存
     implementation("androidx.biometric:biometric:1.1.0")                // 顯示 / 複製 token 前驗證本人
     implementation("androidx.fragment:fragment-ktx:1.8.5")
 }
