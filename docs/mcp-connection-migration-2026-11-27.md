@@ -19,6 +19,7 @@
 | --- | --- |
 | `src/main.ts` 的 `info.mcp_url` | 保留歷史欄位，使用實綁 URL；新增 typed readiness 與實際 legacy 狀態。secure URL 僅 ready 時提供 |
 | `Console.kt`／`Settings.kt` | 共用純 Kotlin presenter；Console 在缺 dashboard／stats 時仍顯示；設定以實際 secure 欄位產生不含 key 的 stdio 範本，取消裸 HTTP URL 複製 |
+| `MainActivity.kt` 身分失敗畫面 | `server_untrusted` 也涵蓋逾時／連線失敗／proof 缺失，不推定其他 App 惡意、不要求移除其他 App；只檢查／重啟本 App 並保持停止連線，保留原驗證邏輯 |
 | `Connector.kt`／`src/control/server.ts` 的 `/connector.mcp_url` | 確認是雲端 OAuth gateway，保留；標籤明示與本機不同 |
 | `scripts/mcp-interop.mjs` | 標準 SDK 真實 stdio adapter，僅列工具及 `get_sync_status`；改為 `--url …/mcp/secure --key-file /absolute/path`，舊 argv key 語法 exit 64 且不回印輸入 |
 | `scripts/serve-fake.ts` | 明確 legacy=false、預設隨機埠、全合成資料與自有私有臨時 key file，不輸出 key；退出只清自己的 fixture |
