@@ -49,6 +49,8 @@ jobs:
         run: python3 test/native-runtime.test.py
       - name: Check review APK handoff safeguards
         run: python3 test/review-apk.test.py
+      - name: Check explicit APK upgrade profile and fingerprint bindings
+        run: python3 test/apk-upgrade.test.py 2>&1 | tee review-results/apk-upgrade-tests.txt
       - name: Install verified Bun bundler
         run: python3 scripts/ci-tools.py "$RUNNER_TEMP/lma-tools"
       - name: Build and validate the release JavaScript bundle

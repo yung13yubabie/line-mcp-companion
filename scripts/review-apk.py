@@ -33,7 +33,7 @@ def decimal(value, reason, maximum=2147483647):
     return int(value)
 
 
-def parse_inspection(signature, badging):
+def parse_inspection(signature, badging, *, package_kind="review"):
     for field in ("package", "sdkVersion", "targetSdkVersion", "native-code"):
         if len(re.findall(r"^" + re.escape(field) + r"\b", badging, re.MULTILINE)) != 1:
             raise Blocked("ambiguous_metadata_field")
@@ -80,8 +80,14 @@ def parse_inspection(signature, badging):
         raise Blocked("incomplete_package_fields")
     if "split" in fields or "versionCodeMajor" in fields or re.search(r"^(?:uses-split|split)(?::|=|\s|$)", badging, re.MULTILINE):
         raise Blocked("split_or_versionCodeMajor_unsupported")
-    if fields["name"] != "tw.linemcp.app.review" or not fields["versionName"].endswith("-review"):
-        raise Blocked("review_package_and_version_required")
+    if package_kind == "review":
+        if fields["name"] != "tw.linemcp.app.review" or not fields["versionName"].endswith("-review"):
+            raise Blocked("review_package_and_version_required")
+    elif package_kind == "release":
+        if fields["name"] != "tw.linemcp.app" or not fields["versionName"] or re.search(r"(?:review|debug)", fields["versionName"], re.IGNORECASE):
+            raise Blocked("release_package_and_version_required")
+    else:
+        raise Blocked("unknown_package_kind")
     version = decimal(fields["versionCode"], "invalid_versionCode")
     minimum = decimal(unique(r"^sdkVersion:'([^']*)'$", badging, "ambiguous_minSDK"), "invalid_minSDK")
     target = decimal(unique(r"^targetSdkVersion:'([^']*)'$", badging, "ambiguous_targetSDK"), "invalid_targetSDK")
@@ -120,7 +126,7 @@ def file_fingerprint(path):
     return digest.hexdigest(), after.st_size, identity(after)
 
 
-def inspect_apk(apk, tools):
+def inspect_apk(apk, tools, *, package_kind="review"):
     apk, tools = Path(apk).absolute(), Path(tools).absolute()
     executables = {name: tools / name for name in ("apksigner", "aapt")}
     for tool in executables.values():
@@ -145,7 +151,7 @@ def inspect_apk(apk, tools):
             evidence[name] = {"path": str(executables[name]), **result}
             if result["exit_code"] != 0:
                 raise Blocked(name + "_failed")
-        item = parse_inspection(evidence["apksigner"]["output"], evidence["aapt"]["output"])
+        item = parse_inspection(evidence["apksigner"]["output"], evidence["aapt"]["output"], package_kind=package_kind)
         # Recheck after parsing too. This is bounded detection, not a kernel immutability guarantee.
         if file_fingerprint(snapshot) != captured:
             raise Blocked("snapshot_changed")
