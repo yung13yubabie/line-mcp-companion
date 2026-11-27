@@ -53,7 +53,7 @@ jobs:
         run: |
           npm run bundle:android:release
           cd android
-          ./gradlew --no-daemon --dependency-verification strict compileDebugKotlin testReviewUnitTest assembleReview
+          ./gradlew --no-daemon --dependency-verification strict --info --stacktrace compileDebugKotlin testReviewUnitTest assembleReview
       - name: Verify APK contents and signatures
         run: |
           mkdir -p review-apks
