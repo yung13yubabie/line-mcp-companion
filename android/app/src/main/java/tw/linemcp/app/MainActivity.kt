@@ -167,11 +167,11 @@ fun AppRoot(client: ControlClient) {
     }) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             if (untrusted) {
-                // H-1：連到的不是我們的 Node 服務（埠被其他 App 佔用）→ 不顯示任何它回的內容、不送任何請求內容
+                // H-1：未通過服務身分／回應完整性驗證；不推定原因，不顯示未驗證內容。
                 Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("⚠️ 本機服務身分驗證失敗", color = Danger, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Text("連接埠 ${BuildConfig.CONTROL_PORT} 上的服務未通過身分或回應完整性驗證，連線已停止。請先檢查本機服務狀態，再重新操作。", fontSize = 14.sp)
-                    Text("請移除最近安裝的可疑 App，然後重新開機或在系統設定裡強制停止本 App 再開啟。", fontSize = 14.sp)
+                    Text("請確認本 App 的本機服務已啟動，關閉再開啟本 App 後重試；若仍無法驗證，保持停止連線。", fontSize = 14.sp)
                 }
                 return@Box
             }

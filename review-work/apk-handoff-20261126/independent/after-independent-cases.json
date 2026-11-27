@@ -1,0 +1,145 @@
+{
+  "scope": "Independent parse/decision/file-consistency cases; official historical text inputs and mocked-wrapper synthetic fixtures, no APK signing, installation or Android execution",
+  "source_sha256": "161df3d7ed91720092363d70d586588fa0678a0ec9362317b5a14626fff51de6",
+  "source_unchanged": true,
+  "passed": 34,
+  "total": 34,
+  "cases": [
+    {
+      "case": "parse existing official raw outputs:original:arm64-v8a",
+      "pass": true
+    },
+    {
+      "case": "parse existing official raw outputs:original:x86_64",
+      "pass": true
+    },
+    {
+      "case": "parse existing official raw outputs:new:arm64-v8a",
+      "pass": true
+    },
+    {
+      "case": "parse existing official raw outputs:new:x86_64",
+      "pass": true
+    },
+    {
+      "case": "historical actual signer difference and same version both block",
+      "pass": true
+    },
+    {
+      "case": "SDK malformed duplicate",
+      "pass": true
+    },
+    {
+      "case": "native ABI malformed duplicate",
+      "pass": true
+    },
+    {
+      "case": "target SDK malformed duplicate",
+      "pass": true
+    },
+    {
+      "case": "package duplicate malformed",
+      "pass": true
+    },
+    {
+      "case": "major version unsupported",
+      "pass": true
+    },
+    {
+      "case": "split unsupported",
+      "pass": true
+    },
+    {
+      "case": "zero version",
+      "pass": true
+    },
+    {
+      "case": "negative version",
+      "pass": true
+    },
+    {
+      "case": "noninteger version",
+      "pass": true
+    },
+    {
+      "case": "overrange version",
+      "pass": true
+    },
+    {
+      "case": "multiple ABI",
+      "pass": true
+    },
+    {
+      "case": "non-Review package",
+      "pass": true
+    },
+    {
+      "case": "malformed duplicate signer count",
+      "pass": true
+    },
+    {
+      "case": "malformed duplicate certificate",
+      "pass": true
+    },
+    {
+      "case": "malformed duplicate required scheme",
+      "pass": true
+    },
+    {
+      "case": "unknown signature scheme",
+      "pass": true
+    },
+    {
+      "case": "malformed optional scheme",
+      "pass": true
+    },
+    {
+      "case": "extra signer",
+      "pass": true
+    },
+    {
+      "case": "unknown signer spelling",
+      "pass": true
+    },
+    {
+      "case": "rotation unsupported",
+      "pass": true
+    },
+    {
+      "case": "duplicate verifies",
+      "pass": true
+    },
+    {
+      "case": "synthetic decision:same version",
+      "pass": true
+    },
+    {
+      "case": "synthetic decision:downgrade",
+      "pass": true
+    },
+    {
+      "case": "synthetic decision:ABI mismatch",
+      "pass": true
+    },
+    {
+      "case": "synthetic decision:signer mismatch",
+      "pass": true
+    },
+    {
+      "case": "synthetic wrapper: same signer advancing version is only future-test eligibility",
+      "pass": true
+    },
+    {
+      "case": "synthetic wrapper: baseline changes after its inspection blocks aggregate decision",
+      "pass": true
+    },
+    {
+      "case": "synthetic report protection:hardlink",
+      "pass": true
+    },
+    {
+      "case": "synthetic report protection:symlink",
+      "pass": true
+    }
+  ]
+}

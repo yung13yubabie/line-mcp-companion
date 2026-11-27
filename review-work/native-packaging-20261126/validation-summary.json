@@ -1,0 +1,54 @@
+{
+  "source_head_before_patch": "e1b25d2dd960bf31363b073b92f9108e75f2d300",
+  "native_script_sha256": "2daf4baba211cdf51da69d219ade1312ebbbbb0babd217caa3d14548c4f4eed6",
+  "tests": {
+    "node": {
+      "passed": 158,
+      "failed": 0
+    },
+    "typecheck_exit": 0,
+    "original_independent_node": {
+      "passed": 13,
+      "failed": 0
+    },
+    "original_independent_python": {
+      "passed": 7,
+      "failed": 0
+    },
+    "original_native": {
+      "passed": 43,
+      "failed": 0
+    },
+    "final_native": {
+      "passed": 67,
+      "failed": 0
+    },
+    "new_independent_cases": {
+      "passed": 23,
+      "failed": 0
+    }
+  },
+  "npm_audit_vulnerabilities": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "bundle_mock_gate": "passed",
+  "actual_prepare": "passed; unchanged pinned ELF bytes; signed provenance verified this call",
+  "actual_original_apk_static_gate": {
+    "arm64-v8a": "passed",
+    "x86_64": "passed"
+  },
+  "production_gate": "expected refusal; OPENSSL_36_EOL / OPENSSL_BRANCH_UNSUPPORTED",
+  "device_stages": "not tested",
+  "physical_16k_native_test": {
+    "apk_sha256": null,
+    "abi": null,
+    "page_size": null,
+    "app_compat_mode_off_evidence": null,
+    "status": "not_tested"
+  }
+}

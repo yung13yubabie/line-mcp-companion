@@ -1,0 +1,15 @@
+✔ codec binds current key, direction, epoch, nonce, timestamp, response status and bytes (3.145464ms)
+✔ request size cap and strict loopback URL configuration fail closed (0.895567ms)
+✔ own encrypted mailbox rejects bad tag/replay/expired timestamp and new epoch invalidates old frame (50.247663ms)
+✔ standard SDK stdio entry supports read, deliberate opt-in and next-request downgrade (466.559315ms)
+✔ secure mailbox retains the independent send-tool budget (75.902486ms)
+✔ actual application main with fresh synthetic storage defaults to secure stdio and disables legacy HTTP (1007.115853ms)
+✔ stdio protected-key-file entry works and refuses broad permissions or symlink (639.357043ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2613.492699

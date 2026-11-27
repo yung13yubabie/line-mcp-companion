@@ -1,0 +1,38 @@
+[
+  {
+    "apk": "line-mcp-companion-0.3.1-arm64-v8a-review.apk",
+    "bytes": 39924112,
+    "sha256": "ab91cf16b7a85fd575d8da5a6d7c2526312922df787d22c1d063fc1cd4fb922e",
+    "signature_exit": 0,
+    "signer_sha256": [
+      "032c8b839478924d89f03c26da668289ab1d24b348cc2d5cb0894bb197fde046"
+    ],
+    "package_exit": 0,
+    "package_line": "package: name='tw.linemcp.app.review' versionCode='5' versionName='0.3.1-review' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'",
+    "sdk": [
+      "sdkVersion:'29'",
+      "targetSdkVersion:'35'"
+    ],
+    "native_code": [
+      "native-code: 'arm64-v8a'"
+    ]
+  },
+  {
+    "apk": "line-mcp-companion-0.3.1-x86_64-review.apk",
+    "bytes": 39162563,
+    "sha256": "cd9d1c39db10d3bcb426881f182fdd2433f1d4c4df99807b9263e16da16f35a4",
+    "signature_exit": 0,
+    "signer_sha256": [
+      "032c8b839478924d89f03c26da668289ab1d24b348cc2d5cb0894bb197fde046"
+    ],
+    "package_exit": 0,
+    "package_line": "package: name='tw.linemcp.app.review' versionCode='5' versionName='0.3.1-review' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'",
+    "sdk": [
+      "sdkVersion:'29'",
+      "targetSdkVersion:'35'"
+    ],
+    "native_code": [
+      "native-code: 'x86_64'"
+    ]
+  }
+]

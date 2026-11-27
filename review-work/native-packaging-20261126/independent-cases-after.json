@@ -1,0 +1,167 @@
+{
+  "scope": "Independent static in-memory ELF contract cases; no Android/native execution, downloads, or production changes",
+  "parser_sha256": "2daf4baba211cdf51da69d219ade1312ebbbbb0babd217caa3d14548c4f4eed6",
+  "parser_source_unchanged_during_cases": true,
+  "cases": [
+    {
+      "case": "arm64-v8a:original actual fixed APK graph",
+      "expected": "accept",
+      "observed": "accept",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:zero executable entry",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Node entry must be nonzero in an executable file-backed LOAD",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:out-of-LOAD executable entry",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Node entry must be nonzero in an executable file-backed LOAD",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:shared library executable entry",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Shared library must not declare an executable entry: libtx_ssl.so",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:unsafe runtime search path",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Runtime native search path must be exactly $ORIGIN: libnode.so",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:incorrect Android interpreter",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Node Android interpreter must be /system/bin/linker64",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:missing exact-provider version",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF provider version definitions are missing: libtx_ssl.so -> libtx_crypto.so: OPENSSL_3.6.0",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:dynamic virtual address outside mapped LOADs",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF metadata has no unambiguous file-backed LOAD mapping",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:dynamic mapping disagrees with file offset",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF dynamic segment virtual mapping disagrees with its file offset",
+      "pass": true
+    },
+    {
+      "case": "arm64-v8a:dynamic memory smaller than file extent",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF dynamic segment exceeds its memory bounds",
+      "pass": true
+    },
+    {
+      "case": "x86_64:original actual fixed APK graph",
+      "expected": "accept",
+      "observed": "accept",
+      "pass": true
+    },
+    {
+      "case": "x86_64:zero executable entry",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Node entry must be nonzero in an executable file-backed LOAD",
+      "pass": true
+    },
+    {
+      "case": "x86_64:out-of-LOAD executable entry",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Node entry must be nonzero in an executable file-backed LOAD",
+      "pass": true
+    },
+    {
+      "case": "x86_64:shared library executable entry",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Shared library must not declare an executable entry: libtx_ssl.so",
+      "pass": true
+    },
+    {
+      "case": "x86_64:unsafe runtime search path",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Runtime native search path must be exactly $ORIGIN: libnode.so",
+      "pass": true
+    },
+    {
+      "case": "x86_64:incorrect Android interpreter",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "Node Android interpreter must be /system/bin/linker64",
+      "pass": true
+    },
+    {
+      "case": "x86_64:missing exact-provider version",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF provider version definitions are missing: libtx_ssl.so -> libtx_crypto.so: OPENSSL_3.6.0",
+      "pass": true
+    },
+    {
+      "case": "x86_64:dynamic virtual address outside mapped LOADs",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF metadata has no unambiguous file-backed LOAD mapping",
+      "pass": true
+    },
+    {
+      "case": "x86_64:dynamic mapping disagrees with file offset",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF dynamic segment virtual mapping disagrees with its file offset",
+      "pass": true
+    },
+    {
+      "case": "x86_64:dynamic memory smaller than file extent",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF dynamic segment exceeds its memory bounds",
+      "pass": true
+    },
+    {
+      "case": "synthetic:RELRO padding extends beyond used LOAD",
+      "expected": "accept",
+      "observed": "accept",
+      "pass": true
+    },
+    {
+      "case": "synthetic:RELRO protection tail covers same-LOAD data",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF writable LOAD overlaps the rounded 16 KiB RELRO protection tail",
+      "pass": true
+    },
+    {
+      "case": "synthetic:RELRO protection tail covers separate-LOAD BSS",
+      "expected": "reject",
+      "observed": "reject",
+      "reason": "ELF writable LOAD overlaps the rounded 16 KiB RELRO protection tail",
+      "pass": true
+    }
+  ],
+  "passed": 23,
+  "total": 23
+}

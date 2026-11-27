@@ -37,6 +37,7 @@ jobs:
         run: |
           test -s "$ANDROID_HOME/platforms/android-35/android.jar"
           test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/zipalign"
           command -v gpg
           command -v dpkg-deb
           command -v readelf
@@ -47,25 +48,39 @@ jobs:
       - name: Prepare the signed, pinned native runtime
         run: |
           python3 test/native-runtime.test.py
-          python3 scripts/node-android/native-runtime.py prepare
+          python3 scripts/node-android/native-runtime.py prepare --report "$RUNNER_TEMP/native-prepare.json"
       - name: Build a review APK without mock code
         run: |
           npm run bundle:android:release
           cd android
-          ./gradlew --no-daemon --dependency-verification strict assembleReview
+          ./gradlew --no-daemon --dependency-verification strict testReviewUnitTest assembleReview
       - name: Verify APK contents and signatures
         run: |
           mkdir -p review-apks
+          python3 - <<'PYTEST'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          reports = list(Path("android/app/build/test-results/testReviewUnitTest").glob("TEST-*.xml"))
+          assert reports, "No JVM test reports; NO-SOURCE is not acceptance"
+          totals = {key: sum(int(ET.parse(p).getroot().get(key, "0")) for p in reports) for key in ("tests", "failures", "errors", "skipped")}
+          assert totals["tests"] > 0 and all(totals[k] == 0 for k in ("failures", "errors", "skipped")), totals
+          assert any(ET.parse(p).getroot().get("name") == "tw.linemcp.app.LocalMcpPresentationTest" and int(ET.parse(p).getroot().get("tests", "0")) > 0 for p in reports), "Missing or empty connection UI model suite"
+          print("Actual local JVM results:", totals, "(not device/UI acceptance)")
+          PYTEST
+          cp android/app/build/test-results/testReviewUnitTest/TEST-*.xml review-apks/
           for abi in arm64-v8a x86_64; do
             apk="android/app/build/outputs/apk/review/app-$abi-review.apk"
             test -s "$apk"
             bash scripts/purge-mock-check.sh "$apk"
-            python3 scripts/node-android/native-runtime.py verify-apk --apk "$apk"
+            python3 scripts/node-android/native-runtime.py verify-apk --apk "$apk" --report "review-apks/$abi-native-linkage.json"
+            "$ANDROID_HOME/build-tools/35.0.0/zipalign" -v -c -P 16 4 "$apk" > "review-apks/$abi-zipalign.txt"
             "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" > "review-apks/$abi-signature.txt"
             "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > "review-apks/$abi-package.txt"
+            python3 scripts/review-apk.py inspect --build-tools "$ANDROID_HOME/build-tools/35.0.0" --apk "$apk" --report "review-apks/$abi-review-receipt.json"
             cp "$apk" "review-apks/line-mcp-companion-0.3.1-$abi-review.apk"
           done
           cp android/native-runtime.lock.json review-apks/
+          cp "$RUNNER_TEMP/native-prepare.json" review-apks/native-prepare.json
           cp "$RUNNER_TEMP/lma-tools/provenance.json" review-apks/build-tools.json
           git rev-parse HEAD > review-apks/source-commit.txt
           sha256sum review-apks/*.apk > review-apks/SHA256SUMS

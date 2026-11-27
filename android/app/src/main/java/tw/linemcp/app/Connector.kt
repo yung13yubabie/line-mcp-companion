@@ -59,8 +59,9 @@ fun ConnectorSection(client: ControlClient, withAuth: (String, () -> Unit) -> Un
             d.optJSONObject("tunnel")?.let { t -> if (t.optString("error").let { it.isNotEmpty() && it != "null" }) Text("通道：${t.optString("error")}", color = Warn, fontSize = 12.sp) }
             val mcpUrl = d.optString("mcp_url").takeIf { it.isNotEmpty() && it != "null" }
             if (mcpUrl != null) {
-                Text("貼到 AI 用戶端的網址：", fontSize = 12.sp, color = Color.Gray)
+                Text("雲端 OAuth 閘道 MCP 網址（自訂連接器）：", fontSize = 12.sp, color = Color.Gray)
                 Text(mcpUrl, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                Text("此網址屬於雲端 OAuth 閘道，與本機 stdio adapter 的受保護端點不同。", fontSize = 12.sp, color = Color.Gray)
                 Text("舊版 SSE：${d.optString("sse_url")}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Color.Gray)
             }
             HorizontalDivider()

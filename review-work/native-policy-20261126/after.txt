@@ -1,0 +1,48 @@
+test_16k_alignment_with_incongruent_offsets_is_rejected (__main__.NativeRuntimeTests.test_16k_alignment_with_incongruent_offsets_is_rejected) ... ok
+test_4k_alignment_is_rejected (__main__.NativeRuntimeTests.test_4k_alignment_is_rejected) ... ok
+test_announced_fix_is_not_treated_as_available_before_release (__main__.NativeRuntimeTests.test_announced_fix_is_not_treated_as_available_before_release) ... ok
+test_apk_missing_reviewed_maven_library_is_rejected (__main__.NativeRuntimeTests.test_apk_missing_reviewed_maven_library_is_rejected) ... ok
+test_apk_with_exact_reviewed_maven_library_is_accepted (__main__.NativeRuntimeTests.test_apk_with_exact_reviewed_maven_library_is_accepted) ... ok
+test_apk_with_stale_provenance_is_rejected (__main__.NativeRuntimeTests.test_apk_with_stale_provenance_is_rejected) ... ok
+test_apk_with_tampered_maven_library_is_rejected (__main__.NativeRuntimeTests.test_apk_with_tampered_maven_library_is_rejected) ... ok
+test_apk_with_unknown_extra_library_is_rejected (__main__.NativeRuntimeTests.test_apk_with_unknown_extra_library_is_rejected) ... ok
+test_apk_without_native_runtime_is_rejected (__main__.NativeRuntimeTests.test_apk_without_native_runtime_is_rejected) ... ok
+test_apk_without_provenance_is_rejected (__main__.NativeRuntimeTests.test_apk_without_provenance_is_rejected) ... ok
+test_both_reviewed_abis_are_accepted (__main__.NativeRuntimeTests.test_both_reviewed_abis_are_accepted) ... ok
+test_cached_download_tampering_is_rejected_without_network (__main__.NativeRuntimeTests.test_cached_download_tampering_is_rejected_without_network) ... ok
+test_committed_policy_blocks_production (__main__.NativeRuntimeTests.test_committed_policy_blocks_production) ... ok
+test_committed_snapshot_signature_and_hash_chain_are_valid (__main__.NativeRuntimeTests.test_committed_snapshot_signature_and_hash_chain_are_valid) ... ok
+test_component_selection_requires_both_matching_abis (__main__.NativeRuntimeTests.test_component_selection_requires_both_matching_abis) ... ok
+test_duplicate_apk_library_is_rejected (__main__.NativeRuntimeTests.test_duplicate_apk_library_is_rejected) ... ok
+test_extra_abi_is_rejected (__main__.NativeRuntimeTests.test_extra_abi_is_rejected) ... ok
+test_extra_library_is_rejected (__main__.NativeRuntimeTests.test_extra_library_is_rejected) ... ok
+test_flipping_approval_cannot_approve_eol_openssl (__main__.NativeRuntimeTests.test_flipping_approval_cannot_approve_eol_openssl) ... ok
+test_lifecycle_review_expiry_rejects_stale_and_clock_rollback (__main__.NativeRuntimeTests.test_lifecycle_review_expiry_rejects_stale_and_clock_rollback) ... ok
+test_local_jni_inventory_keeps_maven_libraries_separate (__main__.NativeRuntimeTests.test_local_jni_inventory_keeps_maven_libraries_separate) ... ok
+test_lock_cannot_relabel_signed_snapshot_date (__main__.NativeRuntimeTests.test_lock_cannot_relabel_signed_snapshot_date) ... ok
+test_maven_elf_hash_is_checked_even_with_matching_aar_hash (__main__.NativeRuntimeTests.test_maven_elf_hash_is_checked_even_with_matching_aar_hash) ... ok
+test_maven_source_verification_does_not_copy_libraries (__main__.NativeRuntimeTests.test_maven_source_verification_does_not_copy_libraries) ... ok
+test_missing_abi_is_rejected (__main__.NativeRuntimeTests.test_missing_abi_is_rejected) ... ok
+test_missing_license_is_rejected (__main__.NativeRuntimeTests.test_missing_license_is_rejected) ... ok
+test_missing_malformed_or_timezone_free_snapshot_fails_closed (__main__.NativeRuntimeTests.test_missing_malformed_or_timezone_free_snapshot_fails_closed) ... ok
+test_modified_library_is_rejected (__main__.NativeRuntimeTests.test_modified_library_is_rejected) ... ok
+test_modified_license_is_rejected (__main__.NativeRuntimeTests.test_modified_license_is_rejected) ... ok
+test_older_openssl_patch_is_rejected_on_supported_branch (__main__.NativeRuntimeTests.test_older_openssl_patch_is_rejected_on_supported_branch) ... ok
+test_prerelease_or_unparseable_versions_are_rejected (__main__.NativeRuntimeTests.test_prerelease_or_unparseable_versions_are_rejected) ... ok
+test_production_cli_rechecks_signed_source_before_output_verification (__main__.NativeRuntimeTests.test_production_cli_rechecks_signed_source_before_output_verification) ... ok
+test_removing_approval_state_does_not_bypass_production_gate (__main__.NativeRuntimeTests.test_removing_approval_state_does_not_bypass_production_gate) ... ok
+test_signed_package_version_cannot_be_relabelled (__main__.NativeRuntimeTests.test_signed_package_version_cannot_be_relabelled) ... ok
+test_snapshot_age_and_future_snapshot_are_rejected (__main__.NativeRuntimeTests.test_snapshot_age_and_future_snapshot_are_rejected) ... ok
+test_snapshot_timestamp_boundaries_use_actual_utc_instants (__main__.NativeRuntimeTests.test_snapshot_timestamp_boundaries_use_actual_utc_instants) ... ok
+test_split_apk_with_provenance_is_accepted (__main__.NativeRuntimeTests.test_split_apk_with_provenance_is_accepted) ... ok
+test_symlinked_abi_directory_is_rejected (__main__.NativeRuntimeTests.test_symlinked_abi_directory_is_rejected) ... ok
+test_symlinked_library_is_rejected (__main__.NativeRuntimeTests.test_symlinked_library_is_rejected) ... ok
+test_synthetic_lifecycle_candidate_is_only_a_necessary_policy_condition (__main__.NativeRuntimeTests.test_synthetic_lifecycle_candidate_is_only_a_necessary_policy_condition) ... ok
+test_truncated_elf_headers_are_rejected (__main__.NativeRuntimeTests.test_truncated_elf_headers_are_rejected) ... ok
+test_unknown_major_and_eol_branch_cannot_inherit_approval (__main__.NativeRuntimeTests.test_unknown_major_and_eol_branch_cannot_inherit_approval) ... ok
+test_wrong_architecture_is_rejected_even_if_hash_matches (__main__.NativeRuntimeTests.test_wrong_architecture_is_rejected_even_if_hash_matches) ... ok
+
+----------------------------------------------------------------------
+Ran 43 tests in 0.252s
+
+OK

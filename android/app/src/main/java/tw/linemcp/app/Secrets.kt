@@ -8,7 +8,7 @@ import java.security.SecureRandom
 
 /**
  * 所有秘密都放在 EncryptedSharedPreferences（主金鑰在 Android Keystore，AES-256-GCM，不可匯出）。
- *  - control_token：本機控制 API HMAC key；mcp_token：MCP Bearer token
+ *  - control_token：本機控制 API HMAC key；mcp_token：本機 MCP 認證加密通道金鑰（僅明確啟用的 legacy HTTP 相容模式另作 Bearer 使用）
  *  - data_key：32-byte 資料金鑰；Node 用它以 AES-GCM 加密 SQLite 裡的 LINE token / E2EE 金鑰。
  *    只在啟動 Node 時經 stdin 傳入，不會以明文寫到任何檔案。
  *  - ai_key：使用者自己的 AI API key（選用）

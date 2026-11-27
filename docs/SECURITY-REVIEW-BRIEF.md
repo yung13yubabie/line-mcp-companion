@@ -4,6 +4,8 @@ Scope: Android app `tw.linemcp.app` (Kotlin/Compose UI + embedded Node 24 runnin
 MCP server, the local control API, AI features and the anti-scam module. Version 0.2.1.
 All paths are relative to the repository root.
 
+**Historical baseline, not the current PR #11 transport contract.** The architecture, secret-transit and listener tables below describe the original 0.2.1 review. Current Android Control uses request HMAC and authenticated response bodies (secret delivery to Node uses stdin). Current local MCP uses the standard stdio adapter → MCP-only AEAD `/mcp/secure`; application main disables legacy HTTP Bearer unless explicitly opted in. The configured historical `info.mcp_url` is not a usable default client setting. UI now uses typed actual readiness, `mcp_secure_url` (null unless bound/ready), actual `mcp_legacy_http_enabled`, and a secret-free key-file template. Cloud `/connector.mcp_url` remains a separate OAuth gateway route. See [current channel contract](local-mcp-channel.md) and [migration/acceptance](mcp-connection-migration-2026-11-27.md). Desktop Control compatibility and low-level test APIs must not be mistaken for Android defaults.
+
 ## 1. Architecture
 
 ```
@@ -58,7 +60,7 @@ Out of scope / accepted: a rooted device or malware with the app's uid; LINE acc
 Legacy migration: on start, any plaintext `line_kv` row is encrypted, then `secure_delete=ON`, `VACUUM`,
 `wal_checkpoint(TRUNCATE)` remove the old plaintext pages (test: `test/security.test.ts`).
 
-## 4. Network listeners and egress
+## 4. Historical network listeners and egress (0.2.1 baseline)
 
 Listeners (both bind **127.0.0.1 only**; code refuses other hosts):
 

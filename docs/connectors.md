@@ -4,12 +4,16 @@ App 有兩個 MCP 入口，都**只綁手機的 127.0.0.1**：
 
 | 入口 | 位址 | 驗證 | 給誰 |
 | --- | --- | --- | --- |
-| 本機 MCP | `http://127.0.0.1:47823/mcp`（Streamable HTTP） | `Authorization: Bearer <MCP token>` | 同一支手機上的用戶端（Termux 裡的 CLI 等） |
-| 雲端連接器閘道（預設關） | `http://127.0.0.1:47825` → 經 HTTPS 通道變成 `https://<你的網址>/mcp`、`/sse` | OAuth 2.1（DCR + PKCE + 配對碼），或（可關）MCP token | ChatGPT、Claude、Grok、Gemini 的「自訂連接器」，以及可帶 header 的 CLI / API |
+| 本機 MCP | 標準 stdio adapter → `http://127.0.0.1:47823/mcp/secure` | MCP 專用 key、每次 challenge／啟動 epoch、分向 AEAD | 同一支手機上的 stdio 用戶端；手機／Termux 相容性仍待裝置驗收 |
+| 雲端連接器閘道（預設關） | `http://127.0.0.1:47825` → 經 HTTPS 通道變成 `https://<你的網址>/mcp`、`/sse` | OAuth 2.1（DCR + PKCE + 配對碼），或預設關閉的獨立 gateway token | ChatGPT、Claude、Grok、Gemini 的「自訂連接器」，以及可帶 header 的 CLI / API |
+
+本機舊 `/mcp` 設定須遷移到 stdio；總控台 → 設定會顯示服務與舊入口的實際狀態，就緒後才能複製不含 key 的檔案式設定範本。`/mcp/secure` 是專用認證封裝，不是可直接貼給 HTTP MCP 用戶端的網址。見[遷移步驟與驗收限制](mcp-connection-migration-2026-11-27.md)。本頁 `/connector` 回應的 `mcp_url` 與 `oauth-smoke.ts` 屬於獨立雲端 gateway，並非本機 `info.mcp_url`，不可混用 key 或替換路徑。
 
 雲端 AI 是從**它們自己的伺服器**連過來，連不到你手機的 127.0.0.1，所以一定要有公開的 HTTPS 網址（通道）。
 
-## 驗證結果（2026-11-25，box 上跑 mock 假資料）
+## 舊入口驗證紀錄（2026-11-25，box 上跑 mock 假資料）
+
+下表為舊入口的歷史互通證據，不是新 stdio adapter 的第三方用戶端或裝置驗收。App 新預設停用本機 HTTP Bearer；開發相容模式須明確設定 `LMA_MCP_LEGACY_HTTP=1`，它保留舊身分風險，不是新安全通道的 fallback。雲端 gateway 仍使用自己的 OAuth／gateway token。
 
 | 用戶端 | 傳輸 | 驗證方式 | 結果 | 怎麼驗的 |
 | --- | --- | --- | --- | --- |
@@ -84,12 +88,12 @@ quick tunnel 每次重開網址都會變：要在 App 更新公開網址，並�
 ### Claude Code
 
 ```
-# 有 header（最簡單；App 要開「也接受 MCP token」）
-claude mcp add --transport http line https://xxxx/mcp --header "Authorization: Bearer <MCP token>"
+# 有 header（最簡單；App 要明確開「接受連接器專用 token」）
+claude mcp add --transport http line https://xxxx/mcp --header "Authorization: Bearer <獨立 gateway token>"
 # 或 OAuth：
 claude mcp add --transport http line https://xxxx/mcp   # 然後在 claude 裡打 /mcp → Authenticate
 # 同一支手機（Termux）直接連本機：
-claude mcp add --transport http line http://127.0.0.1:47823/mcp --header "Authorization: Bearer <MCP token>"
+# 同手機新入口使用 stdio adapter，見 docs/local-mcp-channel.md；此處不使用 gateway token。
 ```
 
 ### Grok（grok.com）
@@ -117,7 +121,7 @@ claude mcp add --transport http line http://127.0.0.1:47823/mcp --header "Author
 `~/.gemini/settings.json`：
 
 ```json
-{"mcpServers":{"line":{"httpUrl":"https://xxxx/mcp","headers":{"Authorization":"Bearer <MCP token>"}}}}
+{"mcpServers":{"line":{"httpUrl":"https://xxxx/mcp","headers":{"Authorization":"Bearer <獨立 gateway token>"}}}}
 ```
 
 或不給 header，啟動後 `/mcp auth line` 走 OAuth。專案資料夾要先被信任（trust folder）MCP 才會載入。
@@ -127,16 +131,14 @@ claude mcp add --transport http line http://127.0.0.1:47823/mcp --header "Author
 - 把閘道放上網路 = 你的白名單聊天可以從網路讀到。OAuth 需要 App 裡的配對碼（10 分鐘、一次性、錯 5 次鎖 1 分鐘）；token 存雜湊、access 1 小時、refresh 30 天且每次輪換（重用就整串撤銷）
 - 不需要時關掉閘道（立即 404）或停掉通道；用完撤銷 AI
 - 只讀需求就不要勾「也允許送出」；就算勾了，送出仍要過白名單、AI 代聊名單、信任狀態（預設審核）、上限、緊急停止
-- 「也接受 MCP token」開著時，知道 MCP token 的人就能從網路連；不用 CLI / API 的話建議關掉
+- 獨立 gateway 靜態 token 功能預設關；開啟後只有持有該專用 token 的人可連，並受其到期／撤銷／scope 限制；不使用時保持關閉，不能用本機 MCP key 代替
 - 一律拒絕：非設定網域的 Host、陌生 Origin、超過 256 KB 的 body；每分鐘 120 次請求、送出類 10 次
 
 ## 本機連線（同一支手機）
 
-```json
-{"mcpServers":{"line":{"type":"http","url":"http://127.0.0.1:47823/mcp","headers":{"Authorization":"Bearer <token>"}}}}
-```
+改用 [標準 stdio adapter 設定](local-mcp-channel.md)，先安裝專案及依賴，再填入腳本實際位置、該安裝的 `/mcp/secure` 位址與 MCP 專用 key 的受保護檔案。Review 使用 47833，正式配置 47823；不要把 Control key 或 gateway token 混用。
 
-token 在「設定 → MCP 連線」，顯示 / 複製前要指紋或螢幕鎖；可以隨時換新 token（舊的立即失效）。
+App 設定內的複製 JSON 是 stdio 範本，需修改本機腳本路徑。舊 HTTP Bearer JSON 已不是 App 預設支援入口，adapter 不會自動降級。key 顯示／複製仍需裝置驗證；輪換會使後續舊 key 請求失效，已開始的副作用不宣稱召回。本機寫入工具仍需在 App 明確啟用。
 
 ## 由連接器代聊（不需要 App 內 API key）
 

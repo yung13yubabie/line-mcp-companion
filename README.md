@@ -9,7 +9,7 @@
 ## 功能
 
 - **本機同步**：只同步勾選的聊天，SQLite + 全文搜尋（中文可用），不標已讀
-- **MCP（Streamable HTTP）**：`127.0.0.1:47823/mcp`，Bearer token，只綁本機
+- **本機 MCP**：標準 stdio adapter 經 MCP 專用認證加密通道連 `127.0.0.1:47823/mcp/secure`；預設只讀，App 預設停用舊 HTTP Bearer。安裝／測試範圍見 [本機安全通道](docs/local-mcp-channel.md)；既有 HTTP 設定請依[遷移說明](docs/mcp-connection-migration-2026-11-27.md)改用 stdio，不能直接貼 `/mcp/secure` 到 HTTP 網址欄。
 - **代聊二選一**（總控台切換）
   - **由連接器代聊**：外部 AI（Claude、ChatGPT…）經 MCP 的 `send_message` 回覆，App 不需要 API key
   - **App 內建 AI**：OpenAI 相容端點＋備援模型鏈；涉及雲端的整條模型鏈預設先去識別化，涵蓋社群草稿與第二輪改寫。規則可能漏掉個資，開啟雲端模型或 MCP 連接器仍會把允許的內容提供給對應服務。
@@ -73,7 +73,7 @@
    ```
 
 3. 開啟 App → 看完風險說明 → 產生 QR → 用另一台裝置顯示並以手機 LINE 掃描 → 輸入 PIN
-4. 在「聊天」勾選要開放的聊天；在「設定」用指紋 / 螢幕鎖確認後複製 MCP 設定
+4. 在「聊天」勾選要開放的聊天；在「總控台 → 設定」取得不含金鑰的 stdio 範本；另用指紋 / 螢幕鎖確認後取得 MCP 通道 key，儲存到範本指定的私有檔案
 
 ## 開發
 

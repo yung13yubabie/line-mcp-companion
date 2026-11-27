@@ -1,26 +1,42 @@
-// 標準 MCP 用戶端互通測試：node scripts/mcp-interop.mjs <url> <token>
+/** Real SDK stdio smoke: status only; never reads messages or falls back to HTTP Bearer. */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-const [url, token] = process.argv.slice(2);
-const t = new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } });
-const c = new Client({ name: "interop-test", version: "1.0.0" });
-await c.connect(t);
-console.log("server:", JSON.stringify(c.getServerVersion()), "session:", t.sessionId ?? "(stateless)");
-const tools = await c.listTools();
-console.log("tools:", tools.tools.map((x) => x.name).join(", "));
-const show = async (name, args = {}) => {
-  const r = await c.callTool({ name, arguments: args });
-  console.log(`\n== ${name} ${JSON.stringify(args)}${r.isError ? " [isError]" : ""}\n` + r.content.map((x) => x.text ?? `[${x.type}]`).join("\n").slice(0, 600));
-  return r;
-};
-const chats = await show("list_allowed_chats");
-let first; try { first = JSON.parse(chats.content[0].text); first = (first.chats ?? first)[0]; } catch {}
-const mid = first?.chat_id;
-await show("get_messages", { chat_id: mid, limit: 3 });
-await show("search_messages", { query: "sprint" });
-await show("get_unread_summary");
-await show("get_sync_status");
-await show("get_messages", { chat_id: "c_mock_private", limit: 1 }); // 未勾選白名單（私密理財群）
-await show("get_messages", { chat_id: "c_does_not_exist", limit: 1 });
-await show("get_attachment", { chat_id: mid, message_id: "9204" });
-await c.close();
+import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { secureMcpUrl } from "../src/mcp/secure-channel.ts";
+import { isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const args = process.argv.slice(2);
+let url, keyFile;
+try {
+ if (args.length !== 4 || args[0] !== "--url" || args[2] !== "--key-file" || !isAbsolute(args[3])) throw new Error();
+ url = secureMcpUrl(args[1]).href;
+ if (!new URL(url).port || Number(new URL(url).port) < 1) throw new Error();
+ keyFile = args[3];
+} catch {
+ process.stderr.write("Usage: node scripts/mcp-interop.mjs --url http://127.0.0.1:PORT/mcp/secure --key-file /absolute/private/key-file\n");
+ process.exit(64);
+}
+const client = new Client({ name: "local-stdio-status-smoke", version: "1.0.0" });
+const transport = new StdioClientTransport({
+ command: process.execPath,
+ args: [fileURLToPath(new URL("mcp-stdio.ts", import.meta.url)), url],
+ env: { ...getDefaultEnvironment(), LMA_MCP_CHANNEL_KEY_FILE: keyFile },
+ stderr: "pipe",
+});
+// Do not forward adapter diagnostics or arbitrary error details into smoke output.
+transport.stderr?.resume();
+try {
+ await client.connect(transport, { timeout: 10000 });
+ const tools = await client.listTools(undefined, { timeout: 10000 });
+ const reply = await client.callTool({ name: "get_sync_status", arguments: {} }, undefined, { timeout: 10000 });
+ if (reply.isError) throw new Error();
+ const text = reply.content.find(x => x.type === "text")?.text;
+ const status = JSON.parse(text ?? "null");
+ if (!status || typeof status.online !== "boolean") throw new Error();
+ console.log(JSON.stringify({ transport: "stdio-adapter", sync_online: status.online,
+  tool_count: tools.tools.length, trigger_sync_listed: tools.tools.some(x => x.name === "trigger_sync"),
+  message_reads_performed: false }));
+} catch {
+ process.stderr.write("MCP stdio status smoke failed; no HTTP fallback.\n");
+ process.exitCode = 1;
+} finally { await client.close(); }

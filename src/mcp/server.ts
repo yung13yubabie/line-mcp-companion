@@ -3,6 +3,7 @@
  * - 預設只綁 127.0.0.1；不設 CORS（瀏覽器網頁無法呼叫）。
  * - 必須 Bearer token；本機寫入權限預設關閉。
  */
+import { secureMcpHandler } from "./secure-http.ts";
 import { createServer, type Server, type IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -180,6 +181,8 @@ export function buildMcpServer(ctx: ToolContext, hooks: BuildOptions = {}): McpS
 export interface HttpOptions {
 	host?: string;
 	port?: number;
+	/** Compatibility only. Application main explicitly disables this unless opted in. */
+	allowLegacyBearer?: boolean;
 	/** 固定 token（測試用）；Android 上用 getToken 以便執行中輪換 */
 	token?: string;
 	getToken?: () => string | undefined;
@@ -270,7 +273,7 @@ export async function startMcpHttp(ctx: ToolContext, opts: HttpOptions = {}): Pr
 	// 只綁 loopback；必須有 token（絕不提供未驗證的服務）
 	if (!LOOPBACK.has(host)) throw new Error("MCP server must bind to a loopback address");
 	const getToken = opts.getToken ?? (() => opts.token);
-	if (!getToken() || String(getToken()).length < 16) throw new Error("MCP token is required (>= 16 chars)");
+	if (!getToken() || String(getToken()).length < 16 || String(getToken()).length > 512) throw new Error("MCP token is required (>= 16 chars)");
 	const bucket = new TokenBucket(opts.ratePerMin ?? 120);
 	const sendBucket = new TokenBucket(opts.sendRatePerMin ?? 10);
 	const maxBody = opts.maxBodyBytes ?? 256 * 1024;
@@ -283,6 +286,18 @@ export async function startMcpHttp(ctx: ToolContext, opts: HttpOptions = {}): Pr
 	const json = (res: import("node:http").ServerResponse, code: number, v: unknown, extra: Record<string, string> = {}) =>
 		res.writeHead(code, { "content-type": "application/json", ...extra }).end(JSON.stringify(v));
 
+	const helloBucket = new TokenBucket(120);
+    const secure = secureMcpHandler(ctx, getToken, buildMcpServer, {
+        takeHello: () => helloBucket.take(),
+        takeRequest: () => bucket.take(),
+        takeSend: (message) => { const count = sendCalls(message); return count === 0 || sendBucket.take(count); },
+        reject: () => { stats.rejected.unauthorized++; const allowed = authFailures.reject("unauthorized"); if (!allowed) stats.rejected.rate_limited++; return allowed; },
+        onCall: (tool, ok, ms, code) => {
+            stats.recent.unshift({ ts: Date.now(), client: "secure-stdio", tool, ok, ms, code });
+            stats.recent.length = Math.min(stats.recent.length, 50);
+            opts.audit?.log("mcp", `tool:${tool}`, { ok, detail: { ms } });
+        },
+    });
 	const http = createServer(async (req, res) => {
 		stats.requests++;
 		if (!req.url?.startsWith("/mcp")) return void res.writeHead(404).end();
@@ -293,6 +308,10 @@ export async function startMcpHttp(ctx: ToolContext, opts: HttpOptions = {}): Pr
 			if (!allowed) stats.rejected.rate_limited++;
 			return void json(res, allowed ? 403 : 429, { error: allowed ? "forbidden" : "auth_rate_limited" }, allowed ? {} : { "retry-after": "60" });
 		}
+		if (req.url === "/mcp/secure" || req.url === "/mcp/secure/hello") {
+			return void await secure(req, res);
+		}
+		if (opts.allowLegacyBearer === false) return void json(res, 403, { error: "legacy_mcp_disabled" });
 		if (!authorized(req, getToken())) {
 			stats.rejected.unauthorized++;
 			const allowed = authFailures.reject("unauthorized");

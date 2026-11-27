@@ -1,0 +1,49 @@
+test_16k_alignment_with_incongruent_offsets_is_rejected (__main__.NativeRuntimeTests.test_16k_alignment_with_incongruent_offsets_is_rejected) ... ok
+test_4k_alignment_is_rejected (__main__.NativeRuntimeTests.test_4k_alignment_is_rejected) ... ok
+test_apk_missing_reviewed_maven_library_is_rejected (__main__.NativeRuntimeTests.test_apk_missing_reviewed_maven_library_is_rejected) ... ok
+test_apk_with_exact_reviewed_maven_library_is_accepted (__main__.NativeRuntimeTests.test_apk_with_exact_reviewed_maven_library_is_accepted) ... ok
+test_apk_with_stale_provenance_is_rejected (__main__.NativeRuntimeTests.test_apk_with_stale_provenance_is_rejected) ... ok
+test_apk_with_tampered_maven_library_is_rejected (__main__.NativeRuntimeTests.test_apk_with_tampered_maven_library_is_rejected) ... ok
+test_apk_with_unknown_extra_library_is_rejected (__main__.NativeRuntimeTests.test_apk_with_unknown_extra_library_is_rejected) ... ok
+test_apk_without_native_runtime_is_rejected (__main__.NativeRuntimeTests.test_apk_without_native_runtime_is_rejected) ... ok
+test_apk_without_provenance_is_rejected (__main__.NativeRuntimeTests.test_apk_without_provenance_is_rejected) ... ok
+test_both_reviewed_abis_are_accepted (__main__.NativeRuntimeTests.test_both_reviewed_abis_are_accepted) ... ok
+test_cached_download_tampering_is_rejected_without_network (__main__.NativeRuntimeTests.test_cached_download_tampering_is_rejected_without_network) ... ok
+test_committed_policy_blocks_production (__main__.NativeRuntimeTests.test_committed_policy_blocks_production) ... FAIL
+test_committed_snapshot_signature_and_hash_chain_are_valid (__main__.NativeRuntimeTests.test_committed_snapshot_signature_and_hash_chain_are_valid) ... ok
+test_duplicate_apk_library_is_rejected (__main__.NativeRuntimeTests.test_duplicate_apk_library_is_rejected) ... ok
+test_extra_abi_is_rejected (__main__.NativeRuntimeTests.test_extra_abi_is_rejected) ... ok
+test_extra_library_is_rejected (__main__.NativeRuntimeTests.test_extra_library_is_rejected) ... ok
+test_flipping_approval_cannot_approve_eol_openssl (__main__.NativeRuntimeTests.test_flipping_approval_cannot_approve_eol_openssl) ... ok
+test_local_jni_inventory_keeps_maven_libraries_separate (__main__.NativeRuntimeTests.test_local_jni_inventory_keeps_maven_libraries_separate) ... ok
+test_maven_elf_hash_is_checked_even_with_matching_aar_hash (__main__.NativeRuntimeTests.test_maven_elf_hash_is_checked_even_with_matching_aar_hash) ... ok
+test_maven_source_verification_does_not_copy_libraries (__main__.NativeRuntimeTests.test_maven_source_verification_does_not_copy_libraries) ... ok
+test_missing_abi_is_rejected (__main__.NativeRuntimeTests.test_missing_abi_is_rejected) ... ok
+test_missing_license_is_rejected (__main__.NativeRuntimeTests.test_missing_license_is_rejected) ... ok
+test_modified_library_is_rejected (__main__.NativeRuntimeTests.test_modified_library_is_rejected) ... ok
+test_modified_license_is_rejected (__main__.NativeRuntimeTests.test_modified_license_is_rejected) ... ok
+test_removing_approval_state_does_not_bypass_production_gate (__main__.NativeRuntimeTests.test_removing_approval_state_does_not_bypass_production_gate) ... ok
+test_signed_package_version_cannot_be_relabelled (__main__.NativeRuntimeTests.test_signed_package_version_cannot_be_relabelled) ... ok
+test_split_apk_with_provenance_is_accepted (__main__.NativeRuntimeTests.test_split_apk_with_provenance_is_accepted) ... ok
+test_symlinked_abi_directory_is_rejected (__main__.NativeRuntimeTests.test_symlinked_abi_directory_is_rejected) ... ok
+test_symlinked_library_is_rejected (__main__.NativeRuntimeTests.test_symlinked_library_is_rejected) ... ok
+test_truncated_elf_headers_are_rejected (__main__.NativeRuntimeTests.test_truncated_elf_headers_are_rejected) ... ok
+test_wrong_architecture_is_rejected_even_if_hash_matches (__main__.NativeRuntimeTests.test_wrong_architecture_is_rejected_even_if_hash_matches) ... ok
+
+======================================================================
+FAIL: test_committed_policy_blocks_production (__main__.NativeRuntimeTests.test_committed_policy_blocks_production)
+----------------------------------------------------------------------
+RuntimeError: OPENSSL_BRANCH_UNSUPPORTED: selected OpenSSL branch lacks a supported compatible production policy
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/40b4883b300a/line-mcp-runtime-20261126/test/native-runtime.test.py", line 233, in test_committed_policy_blocks_production
+    with self.assertRaisesRegex(RuntimeError, "OPENSSL_36_EOL"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "OPENSSL_36_EOL" does not match "OPENSSL_BRANCH_UNSUPPORTED: selected OpenSSL branch lacks a supported compatible production policy"
+
+----------------------------------------------------------------------
+Ran 31 tests in 0.162s
+
+FAILED (failures=1)
